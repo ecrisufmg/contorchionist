@@ -1,0 +1,10 @@
+#N canvas 608 85 730 558 12;
+#X obj 44 75 noise~;
+#X obj 44 99 *~;
+#X obj 131 99 osc~ 0.2;
+#X obj 44 144 torch.rmsoverlap~ -winsize 1024 -hopsize 256;
+#X obj 53 195 sigview~ 16384;
+#X connect 0 0 1 0;
+#X connect 1 0 3 0;
+#X connect 2 0 1 1;
+#X connect 3 0 4 0;

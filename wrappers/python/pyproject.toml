@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pycontorchionist"
+version = "0.1.0"
+description = "Python bindings for Contorchionist Audio Processing Library"
+readme = "README.md"
+license = {text = "GNU GENERAL PUBLIC LICENSE Version 3"}
+authors = [
+    {name = "ECrIS", email = "ecrisufmg@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+keywords = ["audio", "signal-processing", "torch", "mel-spectrogram", "fft"]
+requires-python = ">=3.8"
+dependencies = [
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "numpy>=1.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "black>=22.0",
+    "flake8>=4.0",
+    "mypy>=0.900",
+    "scipy>=1.7.0",
+    "matplotlib>=3.5.0",
+]
+examples = [
+    "scipy>=1.7.0",
+    "matplotlib>=3.5.0",
+    "soundfile>=0.10.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ecrisufmg/contorchionist"
+Repository = "https://github.com/ecrisufmg/contorchionist"
+Documentation = "https://contorchionist.readthedocs.io"
+"Bug Tracker" = "https://github.com/ecrisufmg/contorchionist/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pycontorchionist*"]
+
+[tool.setuptools.package-data]
+pycontorchionist = ["*.so", "*.dylib", "*.dll", "resources/*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true

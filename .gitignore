@@ -1,0 +1,55 @@
+build/
+*.o
+*.obj
+*.dll
+*.so
+*.dylib
+*.a
+
+# Python virtual environments
+.conda/
+.venv/
+
+# graphviz 
+/doc/graph/*
+/doc/graph
+
+# IDE specific files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sdf
+
+# macOS specific files
+.DS_Store
+
+# Python specific files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# CMake specific files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+
+# Output directories from our CMakeLists
+contorchionist-build/
+bin/
+lib/
+
+# Distributable files (if you create them)
+*-dist/
+
+# Test coverage reports
+*.gcno
+*.gcda
+*.gcov
+
