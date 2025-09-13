@@ -6,8 +6,8 @@ project(contorchionist LANGUAGES CXX C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # --- Build Options for Wrappers (can be defined here or in src/wrappers/CMakeLists.txt) ---
-option(BUILD_PD_WRAPPER "Build the Pure Data wrapper" ON)
-option(BUILD_MAX_WRAPPER "Build the Max/MSP wrapper" ON)
+option(BUILD_PD_WRAPPER "Build the Pure Data wrapper" OFF)
+option(BUILD_MAX_WRAPPER "Build the Max/MSP wrapper" OFF)
 option(BUILD_SC_WRAPPER "Build the SuperCollider wrapper" OFF)
 option(BUILD_PYTHON_WRAPPER "Build the Python wrapper" ON)
 

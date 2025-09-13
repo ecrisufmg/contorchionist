@@ -17,14 +17,22 @@ __author__ = "Contorchionist Team"
 
 # List all exported names (these are already imported via *)
 __all__ = [
+    # MelSpectrogram
     "MelSpectrogramProcessor",
     "MelNormMode",
     "SpectrumDataFormat",
     "MelFormulaType", 
-    "WindowType",
-    "NormalizationType",
     "mel_norm_mode_to_string",
     "string_to_mel_norm_mode",
     "spectrum_data_format_to_string",
     "string_to_spectrum_data_format",
+
+    # RMS Overlap
+    "RMSOverlap",
+    "RMSOverlapNormalizationType",
+
+    # Common Enums
+    "WindowType",
+    "WindowAlignment",
+    "NormalizationType"
 ]

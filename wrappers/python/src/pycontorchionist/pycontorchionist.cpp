@@ -4,12 +4,14 @@
 #include <pybind11/numpy.h>
 
 #include "core_ap_melspectrogram.h"
+#include "core_ap_rmsoverlap.h"
 #include "core_util_conversions.h"
 #include "core_util_windowing.h"
 #include "core_util_normalizations.h"
 
 namespace py = pybind11;
 using namespace contorchionist::core::ap_melspectrogram;
+using namespace contorchionist::core::ap_rmsoverlap;
 using namespace contorchionist::core::util_conversions;
 using namespace contorchionist::core::util_windowing;
 using namespace contorchionist::core::util_normalizations;
@@ -58,6 +60,13 @@ PYBIND11_MODULE(pycontorchionist, m) {
         .value("WINDOW", contorchionist::core::util_normalizations::NormalizationType::WINDOW)
         .value("POWER", contorchionist::core::util_normalizations::NormalizationType::POWER)
         .value("MAGNITUDE", contorchionist::core::util_normalizations::NormalizationType::MAGNITUDE)
+        .export_values();
+
+    // ENUM 6: WindowAlignment
+    py::enum_<contorchionist::core::util_windowing::Alignment>(m, "WindowAlignment")
+        .value("LEFT", contorchionist::core::util_windowing::Alignment::LEFT)
+        .value("CENTER", contorchionist::core::util_windowing::Alignment::CENTER)
+        .value("RIGHT", contorchionist::core::util_windowing::Alignment::RIGHT)
         .export_values();
 
     //     HELPER FUNCTIONS para MelNormMode
@@ -114,4 +123,59 @@ PYBIND11_MODULE(pycontorchionist, m) {
         // Métodos
         .def("clear_buffer", &MelSpectrogramProcessor<float>::clear_buffer)
         ;
+
+    // --- RMSOverlap ---
+    using RMSOverlapFloat = RMSOverlap<float>;
+
+    py::enum_<RMSOverlapFloat::NormalizationType>(m, "RMSOverlapNormalizationType")
+        .value("WINDOW_OVERLAP_RMS", RMSOverlapFloat::NormalizationType::WINDOW_OVERLAP_RMS)
+        .value("WINDOW_OVERLAP_MEAN", RMSOverlapFloat::NormalizationType::WINDOW_OVERLAP_MEAN)
+        .value("WINDOW_OVERLAP_VALS", RMSOverlapFloat::NormalizationType::WINDOW_OVERLAP_VALS)
+        .value("OVERLAP_INVERSE", RMSOverlapFloat::NormalizationType::OVERLAP_INVERSE)
+        .value("FIXED_MULTIPLIER", RMSOverlapFloat::NormalizationType::FIXED_MULTIPLIER)
+        .value("NONE", RMSOverlapFloat::NormalizationType::NONE)
+        .export_values();
+
+    py::class_<RMSOverlapFloat>(m, "RMSOverlap")
+        .def(py::init<int, int, contorchionist::core::util_windowing::Type, float, contorchionist::core::util_windowing::Alignment, RMSOverlapFloat::NormalizationType, float, int, bool>(),
+             py::arg("initialWindowSize") = 1024,
+             py::arg("initialHopSize") = 512,
+             py::arg("initialWinType") = contorchionist::core::util_windowing::Type::HANN,
+             py::arg("zeroPaddingFactor") = 0.0f,
+             py::arg("initialWinAlign") = contorchionist::core::util_windowing::Alignment::CENTER,
+             py::arg("initialNormType") = RMSOverlapFloat::NormalizationType::WINDOW_OVERLAP_RMS,
+             py::arg("fixedNormMultiplier") = 1.0f,
+             py::arg("initialBlockSize") = 64,
+             py::arg("verbose") = false,
+             "RMSOverlap Constructor"
+        )
+        .def("post_input_data", [](RMSOverlapFloat& self, py::array_t<float, py::array::c_style | py::array::forcecast> input) {
+            self.post_input_data(input.data(), input.size());
+        }, py::arg("input"), "Post input audio data to the internal circular buffer.")
+
+        .def("process", [](RMSOverlapFloat& self, int inputBlockSize) {
+            auto result = py::array_t<float>(inputBlockSize);
+            py::buffer_info buf = result.request();
+            float* ptr = static_cast<float*>(buf.ptr);
+            self.process(nullptr, ptr, inputBlockSize);
+            return result;
+        }, py::arg("inputBlockSize"), "Process data from the circular buffer and get a block of RMS samples.")
+
+        // Setters
+        .def("set_window_size", &RMSOverlapFloat::setWindowSize, py::arg("newWindowSize"))
+        .def("set_hop_size", &RMSOverlapFloat::setHopSize, py::arg("newHopSize"))
+        .def("set_window_type", &RMSOverlapFloat::setWindowType, py::arg("newType"))
+        .def("set_block_size", &RMSOverlapFloat::setBlockSize, py::arg("newBlockSize"))
+        .def("set_normalization", &RMSOverlapFloat::setNormalization, py::arg("newType"), py::arg("fixedMultiplier") = 1.0f)
+        .def("set_zero_padding", &RMSOverlapFloat::setZeroPadding, py::arg("factor"), py::arg("alignment"))
+
+        // Getters
+        .def("get_window_size", &RMSOverlapFloat::getWindowSize)
+        .def("get_hop_size", &RMSOverlapFloat::getHopSize)
+        .def("get_block_size", &RMSOverlapFloat::getBlockSize)
+        .def("get_window_type", &RMSOverlapFloat::getWindowType)
+        .def("get_normalization_type", &RMSOverlapFloat::getNormalizationType)
+
+        // Other methods
+        .def("reset", &RMSOverlapFloat::reset, "Reset the processor's internal state.");
 }
