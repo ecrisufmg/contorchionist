@@ -58,5 +58,5 @@ if(BUILD_PYTHON_WRAPPER)
 endif()
 
 if(BUILD_SC_WRAPPER)
-    add_subdirectory(supercollider)
+    add_subdirectory(sc)
 endif()

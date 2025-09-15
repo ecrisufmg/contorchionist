@@ -6,9 +6,9 @@ project(contorchionist LANGUAGES CXX C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # --- Build Options for Wrappers (can be defined here or in src/wrappers/CMakeLists.txt) ---
-option(BUILD_PD_WRAPPER "Build the Pure Data wrapper" OFF)
-option(BUILD_MAX_WRAPPER "Build the Max/MSP wrapper" OFF)
-option(BUILD_SC_WRAPPER "Build the SuperCollider wrapper" OFF)
+option(BUILD_PD_WRAPPER "Build the Pure Data wrapper" ON)
+option(BUILD_MAX_WRAPPER "Build the Max/MSP wrapper" ON)
+option(BUILD_SC_WRAPPER "Build the SuperCollider wrapper" ON)
 option(BUILD_PYTHON_WRAPPER "Build the Python wrapper" ON)
 
 # --- Testing (Optional, but recommended) ---
@@ -403,7 +403,7 @@ if(EXISTS ${RESOURCES_DIR})
     foreach(DIST_DIR ${WRAPPER_DIST_DIRS})
         # The copy command for each wrapper will be triggered by the parent target
         add_custom_command(
-            TARGET copy_global_resources
+            TARGET copy_global_resources POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory ${DIST_DIR}
             COMMAND ${CMAKE_COMMAND} -E copy_directory ${RESOURCES_DIR} ${DIST_DIR}/resources
             COMMENT "Copying resources to ${DIST_DIR}"
