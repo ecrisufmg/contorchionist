@@ -39,7 +39,7 @@
 #X text 97 364 -target: sets the label dimensions of the tensor (used to create datasets for machine learning tasks, f 78;
 #X text 110 171 save: [message];
 #X text 279 171 saves the created tensor into a text file;
-#X obj 81 273 cnv 18 3 17 empty empty 1 5 9 0 14 #dcdcdc #9c9c9c 0;
+#X obj 81 273 cnv 18 3 17 empty empty 0 5 9 0 14 #dcdcdc #9c9c9c 0;
 #X text 103 273 bang:;
 #X text 146 274 bang when the tensor is filled;
 #X msg 139 676 save resources/data/tensor.txt;

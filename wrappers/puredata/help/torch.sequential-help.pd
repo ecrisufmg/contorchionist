@@ -1,4 +1,4 @@
-#N canvas 224 25 821 847 12;
+#N canvas 850 52 819 1000 12;
 #X obj -5 29 cnv 3 800 3 empty empty description 12 12 0 14 #7c7c7c #404040 0;
 #X obj -5 87 cnv 3 800 3 empty empty inlets 8 12 0 13 #dcdcdc #000000 0;
 #X obj 77 93 cnv 18 3 17 empty empty 0 5 9 0 14 #dcdcdc #9c9c9c 0;
@@ -64,6 +64,7 @@
 #X text 97 532 -random state (default=-1);
 #X text 94 584 -target: sets target for supervised models (default=false);
 #X text 95 462 -learning_rate (default=1e-03);
+#X obj 146 922 torch.sequential module1 -optimizer adam -loss mse -learning_rate 0.0001 -init normal mean 0 std 0.01 -target -d mps -v;
 #X text 95 605 -outloss: returns the loss value when training is finished (default=false), f 74;
 #N canvas 381 117 450 300 other_messages 0;
 #X text 55 60 initialize the layers weights with a specified method, f 32;
@@ -77,13 +78,12 @@
 #X text 308 692 sets the optimizer and learning rate;
 #X msg 145 664 set module-\$0;
 #X text 250 665 sets the container name;
-#X obj 146 922 torch.sequential module1 -optimizer adam -loss mse -learning_rate 0.0001 -init normal mean 0 std 0.01 -target -d cpu -v;
 #X connect 14 0 13 0;
-#X connect 20 0 66 0;
-#X connect 21 0 66 0;
+#X connect 20 0 58 0;
+#X connect 21 0 58 0;
 #X connect 22 0 21 0;
-#X connect 24 0 66 0;
-#X connect 27 0 66 0;
-#X connect 29 0 66 0;
-#X connect 62 0 66 0;
-#X connect 64 0 66 0;
+#X connect 24 0 58 0;
+#X connect 27 0 58 0;
+#X connect 29 0 58 0;
+#X connect 63 0 58 0;
+#X connect 65 0 58 0;

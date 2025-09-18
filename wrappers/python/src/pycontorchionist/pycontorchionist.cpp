@@ -34,7 +34,7 @@ PYBIND11_MODULE(pycontorchionist, m) {
         .value("DBPHASE", SpectrumDataFormat::DBPHASE)
         .export_values();
 
-    // ENUM 3: MelFormulaType
+    // ENUM 3: MelFormulaType 
     py::enum_<MelFormulaType>(m, "MelFormulaType")
         .value("SLANEY", MelFormulaType::SLANEY)
         .value("HTK", MelFormulaType::HTK)
@@ -93,7 +93,6 @@ PYBIND11_MODULE(pycontorchionist, m) {
                       float, int, float, float, contorchionist::core::util_conversions::MelFormulaType,
                       const std::string&, MelNormMode, torch::Device, bool>(),
              "Full constructor")
-        // ...outros métodos...
         .def("process",
             [](MelSpectrogramProcessor<float>& self, py::array_t<float, py::array::c_style | py::array::forcecast> input) -> py::object {
                 std::vector<float> out1, out2;
@@ -103,8 +102,8 @@ PYBIND11_MODULE(pycontorchionist, m) {
             },
             py::arg("input"),
             R"pbdoc(
-                Processa um bloco de áudio e retorna o vetor de mels.
-                Retorna None se não houver frame pronto.
+                Processes a block of audio and returns the mel spectrogram.
+                Returns None if there is no frame ready.
             )pbdoc"
         )
 
@@ -113,12 +112,38 @@ PYBIND11_MODULE(pycontorchionist, m) {
         .def("get_n_mels", &MelSpectrogramProcessor<float>::get_n_mels)
         .def("get_n_fft", &MelSpectrogramProcessor<float>::get_n_fft)
         .def("get_hop_length", &MelSpectrogramProcessor<float>::get_hop_length)
+        .def("get_win_length", &MelSpectrogramProcessor<float>::get_win_length)
+        .def("get_device", &MelSpectrogramProcessor<float>::get_device)
+        .def("get_normalization_type", &MelSpectrogramProcessor<float>::get_normalization_type)
+        .def("get_output_format", &MelSpectrogramProcessor<float>::get_output_format)
+        .def("get_window_type", &MelSpectrogramProcessor<float>::get_window_type)
+        .def("get_fmin_mel", &MelSpectrogramProcessor<float>::get_fmin_mel)
+        .def("get_fmax_mel", &MelSpectrogramProcessor<float>::get_fmax_mel)
+        .def("get_mel_formula", &MelSpectrogramProcessor<float>::get_mel_formula)
+        .def("get_filterbank_norm", &MelSpectrogramProcessor<float>::get_filterbank_norm)
+        .def("get_mel_norm_mode", &MelSpectrogramProcessor<float>::get_mel_norm_mode)
+        .def("get_mel_filterbank", &MelSpectrogramProcessor<float>::get_mel_filterbank)
+        .def("is_verbose", &MelSpectrogramProcessor<float>::is_verbose)
+
+
+
         
         // Setters
         .def("set_sample_rate", &MelSpectrogramProcessor<float>::set_sample_rate)
         .def("set_n_mels", &MelSpectrogramProcessor<float>::set_n_mels)
         .def("set_n_fft", &MelSpectrogramProcessor<float>::set_n_fft)
         .def("set_hop_length", &MelSpectrogramProcessor<float>::set_hop_length)
+        .def("set_win_length", &MelSpectrogramProcessor<float>::set_win_length)
+        .def("set_device", &MelSpectrogramProcessor<float>::set_device)
+        .def("set_normalization_type", &MelSpectrogramProcessor<float>::set_normalization_type)
+        .def("set_output_format", &MelSpectrogramProcessor<float>::set_output_format)
+        .def("set_window_type", &MelSpectrogramProcessor<float>::set_window_type)
+        .def("set_fmin_mel", &MelSpectrogramProcessor<float>::set_fmin_mel)
+        .def("set_fmax_mel", &MelSpectrogramProcessor<float>::set_fmax_mel)
+        .def("set_mel_formula", &MelSpectrogramProcessor<float>::set_mel_formula)
+        .def("set_filterbank_norm", &MelSpectrogramProcessor<float>::set_filterbank_norm)
+        .def("set_mel_norm_mode", &MelSpectrogramProcessor<float>::set_mel_norm_mode)
+        .def("set_verbose", &MelSpectrogramProcessor<float>::set_verbose)   
         
         // Métodos
         .def("clear_buffer", &MelSpectrogramProcessor<float>::clear_buffer)
