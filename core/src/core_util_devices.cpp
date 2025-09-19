@@ -37,6 +37,7 @@ std::pair<torch::Device, std::string> parse_torch_device(const std::string& devi
             // We attempt to assign it and let LibTorch validate it during actual tensor operations
             // This provides forward compatibility with future device types
             try {
+#if defined(__APPLE__) && (defined(__arm64__) || defined(__aarch64__))
                 // For MPS devices, check availability if possible
                 if (parsed_device_candidate.type() == torch::kMPS) {
                     // Try to check MPS availability - this will work if torch::mps exists
@@ -57,6 +58,10 @@ std::pair<torch::Device, std::string> parse_torch_device(const std::string& devi
                     torch::tensor({1.0f}, torch::TensorOptions().device(parsed_device_candidate));
                     new_device = parsed_device_candidate; // Device appears to work
                 }
+#else         // For non-Apple platforms, just test tensor creation
+                torch::tensor({1.0f}, torch::TensorOptions().device(parsed_device_candidate));
+                new_device = parsed_device_candidate; // Device appears to work
+#endif
             } catch (const c10::Error& device_test_error) {
                 error_message = "Device '" + device_str_requested + "' is not available or supported: " + device_test_error.what();
                 new_device = torch::Device(torch::kCPU); // Fallback

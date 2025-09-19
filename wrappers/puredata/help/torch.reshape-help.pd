@@ -23,8 +23,8 @@
 #X msg 423 443 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17, f 18;
 #X obj 423 497 torch.reshape @permute @inshape 3 2 3 @dims 2 0 1 @mout @v;
 #X text 631 548 creation arguments and flags: input shape \, reshape mode (rehsap/view \, unsqueeze \, squeeze \, flatten \, permute \, transpose) \, new shape (for reshape/view) \, dim1 (for squeenze/unsqueeze) \, start_dim end_dim (for flatten) \, dim1 \, dim2 (for transpose) \, multidimension output mode (return the output tensor keeping the format) \, verbosity (for logs and debugs);
-#X obj 38 359 torch.reshape -inshape 2 3 4 -view -shape 2 3 2 2 -d mps -mout -v;
-#X obj 565 278 torch.reshape -unsqueeze -inshape 2 3 3 -dim 2 -d mps -mout -v;
+#X obj 38 359 torch.reshape -inshape 2 3 4 -view -shape 2 3 2 2 -d cpu -mout -v;
+#X obj 565 278 torch.reshape -unsqueeze -inshape 2 3 3 -dim 2 -d cpu -mout -v;
 #X connect 1 0 2 0;
 #X connect 1 1 3 0;
 #X connect 5 0 24 0;

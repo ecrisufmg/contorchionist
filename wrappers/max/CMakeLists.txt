@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 project(contorchionist_max CXX)
 
-if(NOT (WIN32 OR APPLE))
+if(NOT(WIN32 OR APPLE))
     message(WARNING "! As you are building in ${CMAKE_SYSTEM_NAME}, the Max external will not be built. Only Windows and macOS are supported for Max externals at this time.")
     return()
 endif()
@@ -22,7 +22,7 @@ if(APPLE)
         OUTPUT_VARIABLE NATIVE_ARCH
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
-    
+
     # For Apple Silicon Macs, use arm64; for Intel Macs, use x86_64
     if(NATIVE_ARCH STREQUAL "arm64")
         set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "Build for Apple Silicon" FORCE)
@@ -31,9 +31,9 @@ if(APPLE)
         set(CMAKE_OSX_ARCHITECTURES "x86_64" CACHE STRING "Build for Intel" FORCE)
         message(STATUS "Set CMake architecture for Intel: ${CMAKE_OSX_ARCHITECTURES}")
     endif()
-    
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.11" CACHE STRING "Minimum OS X deployment version" FORCE)
-    
+
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum OS X deployment version" FORCE)
+
     # Note: Skipping Max linker flags as they're causing issues with our build
     # The Max frameworks should provide the necessary symbol resolution
     message(STATUS "Skipping Max linker flags - using framework-based linking only")
@@ -71,6 +71,7 @@ if(WIN32)
     if(MAX_API_LIBRARY_PATH)
         message(STATUS "Found MaxAPI Library: ${MAX_API_LIBRARY_PATH}")
     endif()
+
     if(MAX_AUDIO_LIBRARY_PATH)
         message(STATUS "Found MaxAudio Library: ${MAX_AUDIO_LIBRARY_PATH}")
     endif()
@@ -82,10 +83,11 @@ elseif(APPLE)
     find_library(MAX_AUDIO_FRAMEWORK MaxAudioAPI
         HINTS "${MAX_SDK_PATH}/c74support/msp-includes"
     )
-    
+
     if(MAX_API_FRAMEWORK)
         message(STATUS "Found MaxAPI Framework: ${MAX_API_FRAMEWORK}")
     endif()
+
     if(MAX_AUDIO_FRAMEWORK)
         message(STATUS "Found MaxAudioAPI Framework: ${MAX_AUDIO_FRAMEWORK}")
     endif()
@@ -127,6 +129,7 @@ function(add_max_external SOURCE_FILE)
         if(MAX_API_LIBRARY_PATH)
             target_link_libraries(${CMAKE_TARGET_NAME} PRIVATE "${MAX_API_LIBRARY_PATH}")
         endif()
+
         if(MAX_AUDIO_LIBRARY_PATH)
             target_link_libraries(${CMAKE_TARGET_NAME} PRIVATE "${MAX_AUDIO_LIBRARY_PATH}")
         endif()
@@ -135,15 +138,15 @@ function(add_max_external SOURCE_FILE)
         if(MAX_AUDIO_FRAMEWORK)
             target_link_libraries(${CMAKE_TARGET_NAME} PRIVATE ${MAX_AUDIO_FRAMEWORK})
         endif()
-        
+
         # Link against required system frameworks
-        target_link_libraries(${CMAKE_TARGET_NAME} PRIVATE 
-            "-framework CoreFoundation" 
+        target_link_libraries(${CMAKE_TARGET_NAME} PRIVATE
+            "-framework CoreFoundation"
             "-framework CoreServices"
             "-framework CoreAudio"
             "-framework AudioUnit"
         )
-        
+
         # Set proper rpath for Max frameworks and libraries
         set_target_properties(${CMAKE_TARGET_NAME} PROPERTIES
             BUILD_WITH_INSTALL_RPATH TRUE
@@ -163,23 +166,24 @@ function(add_max_external SOURCE_FILE)
 
     if(APPLE)
         set(DEFAULT_INFO_PLIST_PATH "${MAX_SDK_PATH}/script/Info.plist.in")
+
         if(NOT EXISTS ${DEFAULT_INFO_PLIST_PATH})
             message(FATAL_ERROR "Info.plist default for macOS not found at ${DEFAULT_INFO_PLIST_PATH}.")
         endif()
-        
+
         # Process the Info.plist template
         set(AUTHOR_DOMAIN "com.cycling74")
         set(BUNDLE_IDENTIFIER "max.${RAW_BASENAME}")
         set(PACKAGE_VERSION "1.0")
         set(COPYRIGHT_STRING "Max External")
         set(EXCLUDE_FROM_COLLECTIVES "")
-        
+
         configure_file(
             "${DEFAULT_INFO_PLIST_PATH}"
             "${CMAKE_CURRENT_BINARY_DIR}/Info.plist.${RAW_BASENAME}"
             @ONLY
         )
-        
+
         set_target_properties(${CMAKE_TARGET_NAME} PROPERTIES
             FRAMEWORK TRUE
             BUNDLE TRUE
@@ -189,37 +193,37 @@ function(add_max_external SOURCE_FILE)
             MACOSX_BUNDLE_BUNDLE_NAME "${RAW_BASENAME}"
             MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
             MACOSX_BUNDLE_BUNDLE_VERSION "1.0"
+
             # Force output to our desired directory
             RUNTIME_OUTPUT_DIRECTORY "${MAX_EXTERNAL_OUTPUT_DIR}"
             LIBRARY_OUTPUT_DIRECTORY "${MAX_EXTERNAL_OUTPUT_DIR}"
             ARCHIVE_OUTPUT_DIRECTORY "${MAX_EXTERNAL_OUTPUT_DIR}"
         )
-        
+
         # Add post-build code signing for Apple Silicon compatibility
         add_custom_command(TARGET ${CMAKE_TARGET_NAME} POST_BUILD
             COMMAND codesign --force --deep -s - "$<TARGET_BUNDLE_DIR:${CMAKE_TARGET_NAME}>"
             COMMENT "Code signing ${RAW_BASENAME} for macOS security policy compliance"
             VERBATIM
         )
-        
+
         # Add a post-build step to ensure the bundle ends up in the right place
         add_custom_command(TARGET ${CMAKE_TARGET_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E echo "Moving ${RAW_BASENAME}.${MAX_EXTERN_BUNDLE_EXTENSION} to ${MAX_EXTERNAL_OUTPUT_DIR}"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory 
-                "$<TARGET_BUNDLE_DIR:${CMAKE_TARGET_NAME}>" 
-                "${MAX_EXTERNAL_OUTPUT_DIR}/${RAW_BASENAME}.${MAX_EXTERN_BUNDLE_EXTENSION}"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "$<TARGET_BUNDLE_DIR:${CMAKE_TARGET_NAME}>"
+            "${MAX_EXTERNAL_OUTPUT_DIR}/${RAW_BASENAME}.${MAX_EXTERN_BUNDLE_EXTENSION}"
             COMMENT "Ensuring ${RAW_BASENAME}.${MAX_EXTERN_BUNDLE_EXTENSION} is in ${MAX_EXTERNAL_OUTPUT_DIR}"
         )
     endif()
 
     # Add dependency on the shared library copy targets
     # if(TARGET max_copy_torch_libs)
-    #     add_dependencies(${CMAKE_TARGET_NAME} max_copy_torch_libs)
+    # add_dependencies(${CMAKE_TARGET_NAME} max_copy_torch_libs)
     # endif()
     # if(TARGET max_copy_contorchionist_core_lib)
-    #     add_dependencies(${CMAKE_TARGET_NAME} max_copy_contorchionist_core_lib)
+    # add_dependencies(${CMAKE_TARGET_NAME} max_copy_contorchionist_core_lib)
     # endif()
-
     copy_core_libs_to_wrapper_dist(
         TARGET_NAME ${CMAKE_TARGET_NAME}
         DIST_DIR ${MAX_EXTERNAL_OUTPUT_DIR}
@@ -230,6 +234,7 @@ endfunction()
 
 # --- Automatic Discovery and Creation of Max Externals ---
 file(GLOB MAX_SOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+
 foreach(SOURCE_FILE ${MAX_SOURCE_FILES})
     add_max_external(${SOURCE_FILE})
 endforeach()
@@ -240,6 +245,7 @@ endforeach()
 
 # --- Help File Copying ---
 set(HELP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/help")
+
 if(IS_DIRECTORY "${HELP_SOURCE_DIR}" AND NOT TARGET max_copy_help_files)
     add_custom_target(max_copy_help_files ALL
         COMMENT "Preparing to copy Max help files to ${MAX_EXTERNAL_OUTPUT_DIR}"

@@ -4,9 +4,9 @@
 #X msg 171 265 device mps;
 #X text 258 265 set the device (default: cpu);
 #X text 265 220 set a method registered in the model load (default: forward);
-#X msg 138 169 load Examples/TorchScript/caenn_mfcc.ts;
-#X obj 137 311 torch.ts -m forward -d mps -v;
 #X text 132 338 flags: name of the method registered in the loaded model \; device \; verbosity;
+#X obj 137 311 torch.ts -m forward -d cpu -v;
+#X msg 138 169 load resources/ts/caenn_mfcc.ts;
 #X connect 1 0 6 0;
 #X connect 2 0 6 0;
-#X connect 5 0 6 0;
+#X connect 7 0 6 0;

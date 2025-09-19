@@ -17,11 +17,11 @@
 #X msg 244 255 device mps;
 #X obj 328 118 switch~ 512 1 1;
 #X obj 129 176 / 512;
-#X text 328 400 creation arguments: output vector size (default: 64) \, device (default: mps), f 36;
+#X text 337 399 creation arguments: output vector size (default: 64) \, device (default: mps), f 36;
 #X text 326 254 set the device \, cpu \, cuda or mps (default: cpu);
 #X text 314 285 set the output vector size (default: 64);
 #X text 319 339 enable/disable bias vector (default: 1);
-#X obj 128 401 torch.linear~ -ov 512 -d mps;
+#X obj 128 401 torch.linear~ -ov 512 -d cpu;
 #X connect 0 0 22 0;
 #X connect 1 0 22 0;
 #X connect 2 0 1 0;

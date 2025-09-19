@@ -6,6 +6,9 @@
 #include <sstream>
 #include <chrono>
 #include "core_dp_torchts.h"
+#include <c10/util/Exception.h>
+#include <ATen/core/ATenGeneral.h>
+
 
 
 
@@ -35,20 +38,20 @@ at::Tensor TorchTSProcessor(
                     
         // Ensure result is a tensor
         if (!result.isTensor()) {
-            throw c10::Error("Model output is not a tensor");
+            AT_ERROR("Model output is not a tensor");
         }
 
         return result.toTensor();
 
     } catch (const c10::Error& e) {
-        // Re-throw PyTorch errors with additional context
-        throw c10::Error("Inference execution failed: " + std::string(e.what()));
+        // Re-throw PyTorch errors com contexto extra
+        AT_ERROR("Inference execution failed: ", e.what());
     } catch (const std::exception& e) {
         // Handle standard library exceptions
-        throw c10::Error("Inference execution failed: " + std::string(e.what()));
+        AT_ERROR("Inference execution failed: ", e.what());
     } catch (...) {
         // Handle any other exceptions
-        throw c10::Error("Inference execution failed: Unknown error");
+        AT_ERROR("Inference execution failed: Unknown error");
     }
 }
 
