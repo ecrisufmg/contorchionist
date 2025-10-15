@@ -401,7 +401,7 @@ void *torch_reshape_new(t_symbol *s, int argc, t_atom *argv) {
         );
 
         if (!cfg.success) {
-            pd_error(x, "torch.reshape: %s (fallback para reshape [-1])", cfg.error_message.c_str());
+            pd_error(x, "torch.reshape: %s (fallback to reshape [-1])", cfg.error_message.c_str());
             if (x->verbose) {
                 post("torch.reshape: set to default 'reshape' [-1]");
             }

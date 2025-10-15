@@ -27,20 +27,21 @@ set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 # macOS specific settings
 # Minimum OS X deployment version changed from 10.9 to 10.13 (std::optional::value() is just available for 10.13 and later).
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum OS X deployment version")
+
 # Build Universal Binary for Max compatibility (Max externals typically need this)
 if(APPLE)
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
         set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "Building for Apple Silicon (ARM64)")
-        # Adicione aqui suas configurações específicas para ARM64
+
+    # Adicione aqui suas configurações específicas para ARM64
     elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
         set(CMAKE_OSX_ARCHITECTURES "x86_64" CACHE STRING "Building for Intel (x86_64)")
-        # Adicione aqui suas configurações específicas para Intel
+
+    # Adicione aqui suas configurações específicas para Intel
     else()
         message(WARNING "Arquitetura do macOS não reconhecida: ${CMAKE_SYSTEM_PROCESSOR}")
     endif()
 endif()
-
-
 
 # --- Output Directories (Consistent for the whole project) ---
 set(PROJECT_DIST_DIR ${CMAKE_BINARY_DIR}/dist)
@@ -379,10 +380,10 @@ if(APPLE)
 
     # Only proceed if we found a valid LibTorch lib directory
     if(LIBTORCH_LIB_DIR AND IS_DIRECTORY "${LIBTORCH_LIB_DIR}")
-        # This target is no longer needed as copying is handled per-wrapper
-        # add_custom_target(copy_libtorch_dylibs ALL
-        #     COMMENT "Copying LibTorch dylibs to output directories"
-        # )
+    # This target is no longer needed as copying is handled per-wrapper
+    # add_custom_target(copy_libtorch_dylibs ALL
+    # COMMENT "Copying LibTorch dylibs to output directories"
+    # )
     else()
         message(WARNING "Could not determine LibTorch lib directory for dylib copying")
     endif()
@@ -390,6 +391,7 @@ endif()
 
 # --- Global Resource Copying ---
 set(RESOURCES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/resources)
+
 if(EXISTS ${RESOURCES_DIR})
     set(WRAPPER_DIST_DIRS
         ${PROJECT_DIST_DIR}/puredata
@@ -410,6 +412,7 @@ if(EXISTS ${RESOURCES_DIR})
             VERBATIM
         )
     endforeach()
+
     message(STATUS "Configured copying of 'resources' directory to all wrapper distribution directories.")
 endif()
 
