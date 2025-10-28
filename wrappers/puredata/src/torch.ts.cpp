@@ -180,7 +180,7 @@ static void torch_ts_select_method(t_torch_ts *x, t_symbol *s, int argc, t_atom 
 //* ---------------- set parameters for the model --------------- */
 static void torch_ts_set_parameter(t_torch_ts *x, t_symbol *s, int argc, t_atom *argv) {
 
-    if (argc != 2 || argv[0].a_type != A_SYMBOL || argv[1].a_type != A_FLOAT) {
+    if (argc < 2 || argv[0].a_type != A_SYMBOL) {
         pd_error(x, "torch.ts: provide the parameter name and value (e.g., set temperature 1.5).");
         return;
     }
@@ -191,29 +191,49 @@ static void torch_ts_set_parameter(t_torch_ts *x, t_symbol *s, int argc, t_atom 
     }
     // get the setup method name for the parameter and value from the arguments
     std::string method_name = atom_getsymbol(&argv[0])->s_name;
-    float value = atom_getfloat(&argv[1]);
+
+    // get the value from the second argument (float or list of floats)
+    std::vector<float> values;
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i].a_type != A_FLOAT) {
+            pd_error(x, "torch.ts: parameter values must be floats.");
+            return;
+        }
+        values.push_back(atom_getfloat(&argv[i]));
+    }
+
     // call the setup parameter method on the model
     try {
         // check if the setup parameter method exists in the model
-        if (x->model->find_method(method_name)) {
-            // Create a vector of inputs for the method
-            std::vector<torch::jit::IValue> inputs;
-            // Add the float value as input
-            inputs.push_back(value);
-
-            // call the setup parameter method on the model (ex: set_temperature(1.5))
-            x->model->get_method(method_name)(inputs);
-
-            if (x->verbose) {
-                post("torch.ts: Called method '%s' with value %f", method_name.c_str(), value);
-            }
-        } else {
+        if (!x->model->find_method(method_name)) {
             pd_error(x, "torch.ts: Method '%s' not found in model.", method_name.c_str());
+            return;
+        }
+        // Create a vector of inputs for the method
+        std::vector<torch::jit::IValue> inputs;
+        if (values.size() == 1) {
+            // single value
+            inputs.push_back(values[0]);
+        } else {
+            // list: create tensor and move to model device
+            at::Tensor t = torch::from_blob(values.data(), {(int64_t)values.size()}, torch::TensorOptions().dtype(torch::kFloat)).clone();
+            if (x->device.type() != torch::kCPU) t = t.to(x->device);
+            inputs.push_back(t);
+        }
+        // call the setup parameter method on the model (ex: set_temperature(1.5))
+        x->model->get_method(method_name)(inputs);
+
+        if (x->verbose) {
+            if (values.size() == 1)
+                post("torch.ts: Called method '%s' with value %f", method_name.c_str(), values[0]);
+            else
+                post("torch.ts: Called method '%s' with %zu values", method_name.c_str(), values.size());
         }
     } catch (const c10::Error& e) {
         pd_error(x, "torch.ts: Error calling method '%s': %s", method_name.c_str(), e.what());
     }
 }
+
 
 //* ------------------ forward the input tensor through the model loaded ------------------ */
 static void torch_ts_forward(t_torch_ts *x, t_symbol *s, int argc, t_atom *argv) {
