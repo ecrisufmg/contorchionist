@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests the TorchScript model oscillator_v2.ts by generating a continuous
+Tests the TorchScript model nonlinosc.ts by generating a continuous
 waveform and evaluating the average error against the target function.
 
 Usage:
@@ -20,7 +20,7 @@ def generate_sample(freq_hz, amp, distortion_0_100, bias, phase_norm):
 
 
 def main():
-    model = torch.jit.load('oscillator_v2.ts')
+    model = torch.jit.load('nonlinosc.ts')
     model.eval()
 
     # Test scenarios
