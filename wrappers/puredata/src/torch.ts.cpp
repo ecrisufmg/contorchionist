@@ -16,7 +16,7 @@
 
 
 static t_class *torch_ts_class;
-
+ 
 
 //* ----------------------- sets the device (cpu or cuda) --------------------- *//
 static void torch_ts_device(t_torch_ts *x, t_symbol *s, int argc, t_atom *argv) {
@@ -174,6 +174,63 @@ static void torch_ts_select_method(t_torch_ts *x, t_symbol *s, int argc, t_atom 
             post("torch.ts: %s", msg.c_str());
         }
         post("torch.ts: Selected method set to '%s'", method_name.c_str());
+    }
+}
+
+//* ---------------- set parameters for the model --------------- */
+static void torch_ts_set_parameter(t_torch_ts *x, t_symbol *s, int argc, t_atom *argv) {
+
+    if (argc < 2 || argv[0].a_type != A_SYMBOL) {
+        pd_error(x, "torch.ts: provide the parameter name and value (e.g., set temperature 1.5).");
+        return;
+    }
+    // Check if a model is loaded
+    if (!x->loaded_model || !x->model) {
+        pd_error(x, "torch.ts: No model loaded.");
+        return;
+    }
+    // get the setup method name for the parameter and value from the arguments
+    std::string method_name = atom_getsymbol(&argv[0])->s_name;
+
+    // get the value from the second argument (float or list of floats)
+    std::vector<float> values;
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i].a_type != A_FLOAT) {
+            pd_error(x, "torch.ts: parameter values must be floats.");
+            return;
+        }
+        values.push_back(atom_getfloat(&argv[i]));
+    }
+
+    // call the setup parameter method on the model
+    try {
+        // check if the setup parameter method exists in the model
+        if (!x->model->find_method(method_name)) {
+            pd_error(x, "torch.ts: Method '%s' not found in model.", method_name.c_str());
+            return;
+        }
+        // Create a vector of inputs for the method
+        std::vector<torch::jit::IValue> inputs;
+        if (values.size() == 1) {
+            // single value
+            inputs.push_back(values[0]);
+        } else {
+            // list: create tensor and move to model device
+            at::Tensor t = torch::from_blob(values.data(), {(int64_t)values.size()}, torch::TensorOptions().dtype(torch::kFloat)).clone();
+            if (x->device.type() != torch::kCPU) t = t.to(x->device);
+            inputs.push_back(t);
+        }
+        // call the setup parameter method on the model (ex: set_temperature(1.5))
+        x->model->get_method(method_name)(inputs);
+
+        if (x->verbose) {
+            if (values.size() == 1)
+                post("torch.ts: Called method '%s' with value %f", method_name.c_str(), values[0]);
+            else
+                post("torch.ts: Called method '%s' with %zu values", method_name.c_str(), values.size());
+        }
+    } catch (const c10::Error& e) {
+        pd_error(x, "torch.ts: Error calling method '%s': %s", method_name.c_str(), e.what());
     }
 }
 
@@ -353,4 +410,5 @@ extern "C" void setup_torch0x2ets(void) {
     class_addmethod(torch_ts_class, (t_method)torch_ts_device, gensym("device"), A_GIMME, 0); //set the device (cpu, cuda or mps)
     class_addmethod(torch_ts_class, (t_method)torch_ts_model, gensym("load"), A_SYMBOL, 0); //load a model from a file
     class_addmethod(torch_ts_class, (t_method)torch_ts_select_method, gensym("method"), A_GIMME, 0); //set the method to be used on the loaded model
+    class_addmethod(torch_ts_class, (t_method)torch_ts_set_parameter, gensym("set"), A_GIMME, 0); //set a parameter for the model (e.g., set temperature 1.5)
 }
