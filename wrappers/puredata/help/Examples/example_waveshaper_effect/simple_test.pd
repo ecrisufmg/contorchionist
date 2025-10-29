@@ -1,0 +1,43 @@
+#N canvas 100 100 600 400 12;
+#X declare -path ../../;
+#X obj 20 20 declare -path ../../;
+
+#X text 50 50 Simple Waveshaper Test;
+#X text 50 70 ======================;
+
+#X text 50 100 1. Audio input (440Hz sine);
+#X obj 50 120 osc~ 440;
+#X obj 50 140 *~ 0.5;
+
+#X text 50 170 2. Parameters as DC signals;
+#X obj 150 190 sig~ 0.7;
+#X text 230 190 <- drive (0.7);
+#X obj 150 230 sig~ 0.6;
+#X text 230 230 <- tone (0.6);
+#X obj 150 270 sig~ 0.9;
+#X text 230 270 <- mix (0.9);
+
+#X text 50 310 3. Process;
+#X obj 50 330 torch.ts~ waveshaper.ts -v;
+
+#X text 50 360 4. Output;
+#X obj 50 380 dac~;
+#X obj 60 400 print CHANNELS;
+
+#X text 300 100 Instructions:;
+#X text 300 120 - Turn on DSP;
+#X text 300 140 - Should hear distorted sine;
+#X text 300 160 - Check console for channel info;
+
+#X msg 300 200 \; pd dsp 1;
+#X obj 300 180 loadbang;
+
+#X connect 4 0 5 0;
+#X connect 5 0 14 0;
+#X connect 7 0 14 1;
+#X connect 9 0 14 2;
+#X connect 11 0 14 3;
+#X connect 14 0 16 0;
+#X connect 14 0 16 1;
+#X connect 14 0 17 0;
+#X connect 22 0 21 0;
