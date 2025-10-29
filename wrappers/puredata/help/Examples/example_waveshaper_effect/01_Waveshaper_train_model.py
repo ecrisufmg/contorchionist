@@ -150,6 +150,7 @@ def create_synthetic_data(num_examples=5000):
     
     IMPORTANT: Generates both isolated blocks AND consecutive blocks
     from longer signals to help the model generalize to continuous audio.
+    EMPHASIS on consecutive blocks to learn smooth transitions.
     
     Returns:
         Tuple of tensors for 4 separate channels + targets:
@@ -160,7 +161,7 @@ def create_synthetic_data(num_examples=5000):
         - targets: (N, 64) - target output
     """
     print(f"   Generating {num_examples} training examples...")
-    print(f"   (50% isolated blocks, 50% consecutive blocks from longer signals)")
+    print(f"   (10% isolated, 90% consecutive blocks - HEAVY continuity focus to eliminate 750Hz)")
     
     ch0_list = []  # audio
     ch1_list = []  # drive DC
@@ -172,8 +173,8 @@ def create_synthetic_data(num_examples=5000):
         if (idx + 1) % 1000 == 0:
             print(f"   ... {idx + 1}/{num_examples} examples generated")
         
-        # 50% isolated blocks, 50% consecutive blocks
-        if idx % 2 == 0:
+        # 10% isolated blocks, 90% consecutive blocks (HEAVY continuity focus)
+        if idx % 10 < 1:  # Only 10% isolated
             # Generate a single random 64-sample block
             t = np.arange(BLOCK_SIZE) / FS
             
@@ -189,10 +190,10 @@ def create_synthetic_data(num_examples=5000):
             
             signal = signal / (np.max(np.abs(signal)) + 1e-8) * np.random.uniform(0.3, 0.9)
         
-        else:
+        else:  # 90% consecutive - learn continuous signals!
             # Generate a longer signal and extract a random block
             # This creates blocks that have realistic continuity
-            long_length = BLOCK_SIZE * np.random.randint(3, 8)  # 3-7 blocks long
+            long_length = BLOCK_SIZE * np.random.randint(7, 16)  # 7-15 blocks long (MUCH longer sequences)
             t_long = np.arange(long_length) / FS
             
             freq1 = np.random.uniform(100, 5000)
@@ -244,6 +245,46 @@ def create_synthetic_data(num_examples=5000):
     return ch0, ch1, ch2, ch3, targets_tensor
 
 
+def continuity_loss(outputs, targets):
+    """
+    Penalizes discontinuities at block boundaries.
+    Uses multiple approaches:
+    1. Direct jump (last sample vs first sample of next block)
+    2. Derivative continuity (slope continuity)
+    3. Weighted more heavily to really enforce smooth transitions
+    """
+    if outputs.shape[0] < 2:
+        return torch.tensor(0.0)
+    
+    # Approach 1: Direct sample discontinuity
+    last_samples = outputs[:-1, -1]    # (N-1,)
+    first_samples = outputs[1:, 0]     # (N-1,)
+    target_last = targets[:-1, -1]
+    target_first = targets[1:, 0]
+    
+    # Absolute jump between blocks
+    output_jump = torch.abs(first_samples - last_samples)
+    target_jump = torch.abs(target_first - target_last)
+    jump_loss = torch.mean((output_jump - target_jump) ** 2)
+    
+    # Approach 2: Derivative continuity (check slope)
+    # Last 2 samples of each block
+    output_slope_before = outputs[:-1, -1] - outputs[:-1, -2]
+    target_slope_before = targets[:-1, -1] - targets[:-1, -2]
+    
+    # First 2 samples of next block
+    output_slope_after = outputs[1:, 1] - outputs[1:, 0]
+    target_slope_after = targets[1:, 1] - targets[1:, 0]
+    
+    # Penalize slope mismatch
+    slope_diff_output = torch.abs(output_slope_after - output_slope_before)
+    slope_diff_target = torch.abs(target_slope_after - target_slope_before)
+    slope_loss = torch.mean((slope_diff_output - slope_diff_target) ** 2)
+    
+    # Combine both losses
+    return jump_loss + 0.5 * slope_loss
+
+
 def train_model():
     print("=" * 70)
     print("Training Waveshaper Effect (64-sample blocks)")
@@ -251,6 +292,7 @@ def train_model():
     print("Input:  4 separate channel tensors (audio, drive_dc, tone_dc, mix_dc)")
     print("Output: 1 channel tensor (processed audio)")
     print(f"Block size: {BLOCK_SIZE}, Sampling rate: {FS:.0f} Hz")
+    print("With CONTINUITY LOSS to prevent block boundary artifacts")
     print("=" * 70)
     
     model = WaveshaperModel()
@@ -270,7 +312,7 @@ def train_model():
     print(f"   - Target shape: {train_targets.shape}")
     
     print("\n2. Training...")
-    num_epochs = 800  # Reduced from 2000 - model converges early
+    num_epochs = 2000 
     model.train()
     
     # Train with mini-batches
@@ -284,9 +326,14 @@ def train_model():
     patience_counter = 0
     patience = 50  # Early stopping
     
+    # Continuity loss weight - VERY HIGH to eliminate 750Hz artifact
+    continuity_weight = 20.0  # Increased from 5.0 - aggressive continuity enforcement
+    print(f"   Continuity weight: {continuity_weight} (VERY HIGH to eliminate 750Hz artifact)")
+    
     for epoch in range(num_epochs):
         perm = torch.randperm(n)
         epoch_loss = 0.0
+        epoch_cont_loss = 0.0
         
         for i in range(0, n, batch_size):
             idx = perm[i:i+batch_size]
@@ -297,15 +344,25 @@ def train_model():
             batch_y = train_targets[idx]  # (batch, 64)
             
             outputs = model(batch_ch0, batch_ch1, batch_ch2, batch_ch3)  # (batch, 64)
-            loss = criterion(outputs, batch_y)
+            
+            # Main reconstruction loss
+            mse_loss = criterion(outputs, batch_y)
+            
+            # Continuity loss (penalize discontinuities between consecutive blocks)
+            cont_loss = continuity_loss(outputs, batch_y)
+            
+            # Combined loss
+            loss = mse_loss + continuity_weight * cont_loss
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
-            epoch_loss += loss.item() * batch_ch0.size(0)
+            epoch_loss += mse_loss.item() * batch_ch0.size(0)
+            epoch_cont_loss += cont_loss.item() * batch_ch0.size(0)
         
         epoch_loss /= n
+        epoch_cont_loss /= n
         
         # Early stopping check
         if epoch_loss < best_loss:
@@ -319,12 +376,13 @@ def train_model():
             break
         
         if (epoch + 1) % 50 == 0 or epoch == 0:
-            print(f"   Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.6f}")
+            print(f"   Epoch [{epoch+1}/{num_epochs}], MSE: {epoch_loss:.6f}, Continuity: {epoch_cont_loss:.6f}")
         elif (epoch + 1) % 10 == 0:
             # More frequent but less verbose feedback
-            print(f"   ... epoch {epoch+1}/{num_epochs} (loss: {epoch_loss:.6f})")
+            print(f"   ... epoch {epoch+1}/{num_epochs} (mse: {epoch_loss:.6f}, cont: {epoch_cont_loss:.6f})")
     
-    print(f"\n3. Training completed! Final loss: {epoch_loss:.6f}, Best loss: {best_loss:.6f}")
+    print(f"\n3. Training completed! Final MSE: {epoch_loss:.6f}, Best MSE: {best_loss:.6f}")
+    print(f"   Final Continuity Loss: {epoch_cont_loss:.6f}")
     
     # Test: process a simple sine wave block
     print("\n4. Testing with a 440Hz sine wave block")

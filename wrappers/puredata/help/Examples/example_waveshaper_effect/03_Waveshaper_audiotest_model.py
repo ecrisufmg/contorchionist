@@ -218,14 +218,14 @@ def main():
     target_int16 = to_int16(target_audio)
     model_int16 = to_int16(model_audio)
     
-    wavfile.write('input_audio.wav', int(FS), input_int16)
-    wavfile.write('target_waveshaper.wav', int(FS), target_int16)
-    wavfile.write('model_waveshaper.wav', int(FS), model_int16)
-    
-    print(f"   ✓ Saved: input_audio.wav")
-    print(f"   ✓ Saved: target_waveshaper.wav")
-    print(f"   ✓ Saved: model_waveshaper.wav")
-    
+    wavfile.write('audio_1-input_audio.wav', int(FS), input_int16)
+    wavfile.write('audio_2-target_waveshaper.wav', int(FS), target_int16)
+    wavfile.write('audio_3-model_waveshaper.wav', int(FS), model_int16)
+
+    print(f"   ✓ Saved: audio_1-input_audio.wav")
+    print(f"   ✓ Saved: audio_2-target_waveshaper.wav")
+    print(f"   ✓ Saved: audio_3-model_waveshaper.wav")
+
     # Analysis
     print("\n" + "=" * 70)
     print("ANALYSIS:")
