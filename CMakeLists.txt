@@ -394,6 +394,7 @@ if(EXISTS ${RESOURCES_DIR})
     set(WRAPPER_DIST_DIRS
         ${PROJECT_DIST_DIR}/puredata
         ${PROJECT_DIST_DIR}/max
+        ${PROJECT_DIST_DIR}/supercollider
         ${PROJECT_DIST_DIR}/python
     )
 
