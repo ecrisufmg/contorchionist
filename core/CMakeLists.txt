@@ -40,9 +40,13 @@ file(GLOB_RECURSE CONTORCHIONIST_CORE_SOURCES "src/*.cpp")
 list(FILTER CONTORCHIONIST_CORE_SOURCES EXCLUDE REGEX "src/_.*\\.cpp$")
 
 # --- Header Files ---
-# Automatically include all .h files in include/ that don't start with _
-file(GLOB_RECURSE CONTORCHIONIST_CORE_HEADERS "include/*.h")
+# Automatically include all .h and .hpp files in include/ that don't start with _
+file(GLOB_RECURSE CONTORCHIONIST_CORE_HEADERS
+    "include/*.h"
+    "include/*.hpp"
+)
 list(FILTER CONTORCHIONIST_CORE_HEADERS EXCLUDE REGEX "include/_.*\\.h$")
+list(FILTER CONTORCHIONIST_CORE_HEADERS EXCLUDE REGEX "include/_.*\\.hpp$")
 
 # --- Library Definition ---
 add_library(contorchionist_core SHARED ${CONTORCHIONIST_CORE_SOURCES}) # Changed STATIC to SHARED
