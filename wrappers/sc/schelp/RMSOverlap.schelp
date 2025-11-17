@@ -1,0 +1,65 @@
+class:: RMSOverlap
+summary:: Calculates Root Mean Square of an audio signal using overlapping windows.
+related:: Classes/Amplitude, Classes/Loudness
+categories:: UGens>Analysis>Contorchionist
+
+description::
+RMSOverlap processes an input audio signal, calculating the Root Mean Square (RMS) amplitude.
+This implementation is based on the contorchionist library, using libtorch for its core processing.
+It uses a sliding window approach, allowing for overlapping windows to provide a smoother RMS envelope.
+The window size, hop size, window type, and normalization method can be specified.
+
+instancemethods::
+
+method::ar
+Calculates the RMS of the input signal at audio rate.
+
+argument::in
+The input audio signal.
+
+argument::winSize
+The size of the analysis window in samples. Defaults to 1024.
+
+argument::hopSize
+The hop size in samples (i.e., the amount the window slides forward for each calculation).
+Determines the overlap between successive windows. Defaults to 512.
+
+argument::winType
+The windowing function to apply. Mapped from a float:
+0=Rectangular, 1=Hann, 2=Bartlett (Triangular), 3=Hamming, 4=Blackman, 5=Cosine.
+Defaults to 1 (Hann).
+
+argument::zeroPad
+Zero padding factor, from 0.0 to < 1.0. Defaults to 0.0.
+
+argument::winAlign
+Window alignment. Mapped from a float:
+0=Left, 1=Center, 2=Right. Defaults to 1 (Center).
+
+argument::normType
+Normalization type. Mapped from a float:
+0=Window Overlap RMS, 1=Window Overlap Mean, 2=Window Overlap Vals, 3=Overlap Inverse, 4=Fixed Multiplier, 5=None.
+Defaults to 0 (Window Overlap RMS).
+
+argument::fixedNorm
+A fixed multiplier for normalization, only used if normType is 4. Defaults to 1.0.
+
+argument::mul
+Output amplitude multiplier.
+
+argument::add
+Output amplitude offset.
+
+returns:: A UGen representing the calculated RMS signal.
+
+examples::
+
+code::
+// Basic usage: RMS of a white noise signal
+{
+	var input = WhiteNoise.ar(0.5)*SinOsc.ar(0.2);
+	var rms = RMSOverlap.ar(input, winSize: 2048, hopSize: 512);
+	rms;
+}.scope();
+::
+

@@ -1,0 +1,9 @@
+[submodule "thirdparty/max-sdk"]
+	path = thirdparty/max-sdk
+	url = https://github.com/Cycling74/max-sdk.git
+[submodule "thirdparty/pd.cmake"]
+	path = thirdparty/pd.cmake
+	url = https://github.com/pure-data/pd.cmake.git
+[submodule "thirdparty/max-sdk-base"]
+	path = thirdparty/max-sdk-base
+	url = https://github.com/Cycling74/max-sdk-base.git
