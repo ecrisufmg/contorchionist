@@ -457,13 +457,7 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
             auto progress = torch::where(active_mask, onset_ramp_progress_, torch::zeros_like(onset_ramp_progress_));
             auto progress_norm = torch::clamp(progress / ramp_frames, 0.0f, 1.0f);
 
-            const float sigmoid_steepness = 8.0f;
-            const float sigmoid_low = 1.0f / (1.0f + std::exp(sigmoid_steepness * 0.5f));
-            const float sigmoid_high = 1.0f / (1.0f + std::exp(-sigmoid_steepness * 0.5f));
-            const float sigmoid_range = std::max(std::numeric_limits<float>::epsilon(), sigmoid_high - sigmoid_low);
-
-            auto logistic = torch::sigmoid((progress_norm - 0.5f) * sigmoid_steepness);
-            auto eased = torch::clamp((logistic - sigmoid_low) / sigmoid_range, 0.0f, 1.0f);
+            auto eased = progress_norm * progress_norm * (3.0f - 2.0f * progress_norm);
 
             onset_weight = torch::where(active_mask, eased, torch::zeros_like(eased));
 
@@ -488,7 +482,17 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     }
 
     torch::Tensor attack_update = mag_attack_tensor * mag_in + (1.0f - mag_attack_tensor) * memory_magnitude_;
-    memory_magnitude_ = torch::where(reinforce_mask, attack_update, memory_magnitude_);
+
+    torch::Tensor ramp_factor = torch::ones_like(mag_in);
+    torch::Tensor ramp_factor_phase = torch::ones_like(mag_in);
+    if (attack_onset_ >= static_cast<T>(0.0) && attack_onset_ramp_frames_ > 0) {
+        auto active_mask = onset_ramp_active_ > 0.5f;
+        ramp_factor = torch::where(active_mask, onset_weight, ramp_factor);
+        ramp_factor_phase = ramp_factor;
+    }
+
+    auto blended_update = memory_magnitude_ + ramp_factor * (attack_update - memory_magnitude_);
+    memory_magnitude_ = torch::where(reinforce_mask, blended_update, memory_magnitude_);
 
     // 4. Apply limiter if enabled
     if (limiter_enabled_) {
@@ -524,7 +528,7 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
         phase_attack_tensor = phase_attack_tensor + onset_weight * (onset_phase_tensor - phase_attack_tensor);
     }
 
-    auto phase_update = memory_phase_ + phase_attack_tensor * phase_diff;
+    auto phase_update = memory_phase_ + ramp_factor_phase * phase_attack_tensor * phase_diff;
     
     // Update phase only where bins are being reinforced
     memory_phase_ = torch::where(reinforce_mask, phase_update, memory_phase_);
