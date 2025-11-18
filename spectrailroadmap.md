@@ -14,6 +14,9 @@ Este documento organiza a evolução planejada do `SpectralTrailsProcessor` e do
 - **Abordagem**:
   - Manter tempos de ataque separados para magnitude e fase.
   - Ajustar o ataque com base na diferença entre entrada e memória (p.ex., interpolação exponencial dependente da magnitude do erro).
+  - Investigar curvas com assimetria controlada: manter ataques padrão em 0.001/0.999 e usar um ganho adaptativo (`attackadapt`) que só aproxima o coeficiente de 1.0 quando o delta é alto.
+  - Testar alternativas de interpolação (p.ex. função sigmoide ou soft knee) para suavizar transições, garantindo que bins silenciosos não reintroduzam ruído em novos ataques.
+  - Mapear uma tabela de coeficientes por faixa de frequência para tratar graves e agudos com suavizações diferentes (se necessário).
   - Expor novos parâmetros conforme necessário e medir a redução de artefatos auditivos.
 
 ## Prioridade 3 — Limiter suave

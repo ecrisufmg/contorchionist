@@ -20,13 +20,16 @@ typedef struct _torch_spectrails_tilde {
     // Parameters stored in the Pd object
     float p_threshold;
     float p_attack;
+    float p_phase_attack;
     float p_decay;
     float p_decay6db;
     bool p_limiter_enabled;
     float p_max_value;
     float p_sample_rate;
     float p_hop_size;
+    float p_attack_adapt;
     bool p_use_decay6db;
+    bool p_phase_attack_locked;
     size_t p_num_bins; // N/2 + 1
     size_t p_fft_size; // Full FFT size (N)
 
@@ -44,6 +47,7 @@ static t_int *torch_spectrails_tilde_perform(t_int *w);
 // --- Setter Methods ---
 static void torch_spectrails_tilde_threshold(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_attack(t_torch_spectrails_tilde *x, t_floatarg f);
+static void torch_spectrails_tilde_phaseattack(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_decay(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_decay6db(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_decay6b(t_torch_spectrails_tilde *x, t_floatarg f);
@@ -51,6 +55,7 @@ static void torch_spectrails_tilde_limiter(t_torch_spectrails_tilde *x, t_floata
 static void torch_spectrails_tilde_maxvalue(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_reset(t_torch_spectrails_tilde *x);
 static void torch_spectrails_tilde_hopsize(t_torch_spectrails_tilde *x, t_floatarg f);
+static void torch_spectrails_tilde_attackadapt(t_torch_spectrails_tilde *x, t_floatarg f);
 
 
 // --- DSP Routine ---
@@ -194,6 +199,7 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     // Parse parameters with defaults
     x->p_threshold = parser.get_float("threshold", 0.01f);
     x->p_attack = parser.get_float("attack", 0.8f);
+    x->p_phase_attack = parser.get_float("phaseattack phase_attack", x->p_attack);
     x->p_decay = parser.get_float("decay", 0.999f);
     x->p_decay6db = parser.get_float("decay6db", -1.0f);
     x->p_limiter_enabled = static_cast<bool>(parser.get_float("limiter", 0.0f));
@@ -203,11 +209,28 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
         x->p_hop_size = static_cast<float>(x->p_fft_size);
     }
 
+    if (x->p_attack < 0.0f) {
+        x->p_attack = 0.0f;
+    } else if (x->p_attack > 1.0f) {
+        x->p_attack = 1.0f;
+    }
+
+    if (x->p_phase_attack < 0.0f) {
+        x->p_phase_attack = 0.0f;
+    } else if (x->p_phase_attack > 1.0f) {
+        x->p_phase_attack = 1.0f;
+    }
+
     x->p_sample_rate = sys_getsr();
     if (x->p_sample_rate <= 0.0f) {
         x->p_sample_rate = 48000.0f;
     }
     x->p_use_decay6db = false;
+    x->p_attack_adapt = parser.get_float("attackadapt attackcurve", 0.0f);
+    if (x->p_attack_adapt < 0.0f) {
+        x->p_attack_adapt = 0.0f;
+    }
+    x->p_phase_attack_locked = parser.has_flag("phaseattack phase_attack");
 
     // Instantiate the C++ processor
     try {
@@ -220,9 +243,13 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
         // Configure processor with parsed parameters
         x->processor->set_threshold(x->p_threshold);
         x->processor->set_attack(x->p_attack);
+        if (x->p_phase_attack_locked) {
+            x->processor->set_phase_attack(x->p_phase_attack);
+        }
         x->processor->set_decay(x->p_decay);
         x->processor->set_limiter_enabled(x->p_limiter_enabled);
         x->processor->set_max_value(x->p_max_value);
+        x->processor->set_attack_dynamic_rate(x->p_attack_adapt);
 
         if (x->p_decay6db > 0.0f) {
             x->processor->set_decay_time_s(x->p_decay6db, x->p_sample_rate, x->p_hop_size);
@@ -250,6 +277,8 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     post("  Hop Size: %.2f", x->p_hop_size);
     post("  Threshold: %.6f", x->p_threshold);
     post("  Attack: %.6f", x->p_attack);
+    post("  Phase Attack: %.6f", x->p_phase_attack_locked ? x->p_phase_attack : x->p_attack);
+    post("  Attack Adapt: %.6f", x->p_attack_adapt);
     post("  Decay: %.6f", x->p_decay);
     if (x->p_use_decay6db) {
         post("  Decay6dB: %.6f s", x->p_decay6db);
@@ -272,9 +301,17 @@ static void torch_spectrails_tilde_threshold(t_torch_spectrails_tilde *x, t_floa
 }
 
 static void torch_spectrails_tilde_attack(t_torch_spectrails_tilde *x, t_floatarg f) {
+    if (f < 0.0f) {
+        f = 0.0f;
+    } else if (f > 1.0f) {
+        f = 1.0f;
+    }
     x->p_attack = f;
     if (x->processor) {
         x->processor->set_attack(x->p_attack);
+        if (!x->p_phase_attack_locked) {
+            x->p_phase_attack = x->p_attack;
+        }
         post("torch.spectrails~: attack set to %.6f", x->p_attack);
     }
 }
@@ -307,6 +344,21 @@ static void torch_spectrails_tilde_decay6db(t_torch_spectrails_tilde *x, t_float
 static void torch_spectrails_tilde_decay6b(t_torch_spectrails_tilde *x, t_floatarg f) {
     post("torch.spectrails~: alias 'decay6b' treated as 'decay6db'");
     torch_spectrails_tilde_decay6db(x, f);
+}
+
+static void torch_spectrails_tilde_phaseattack(t_torch_spectrails_tilde *x, t_floatarg f) {
+    if (f < 0.0f) {
+        f = 0.0f;
+    } else if (f > 1.0f) {
+        f = 1.0f;
+    }
+
+    x->p_phase_attack = f;
+    x->p_phase_attack_locked = true;
+    if (x->processor) {
+        x->processor->set_phase_attack(x->p_phase_attack);
+        post("torch.spectrails~: phase attack set to %.6f", x->p_phase_attack);
+    }
 }
 
 static void torch_spectrails_tilde_limiter(t_torch_spectrails_tilde *x, t_floatarg f) {
@@ -347,6 +399,18 @@ static void torch_spectrails_tilde_hopsize(t_torch_spectrails_tilde *x, t_floata
     }
 }
 
+static void torch_spectrails_tilde_attackadapt(t_torch_spectrails_tilde *x, t_floatarg f) {
+    if (f < 0.0f) {
+        f = 0.0f;
+    }
+
+    x->p_attack_adapt = f;
+    if (x->processor) {
+        x->processor->set_attack_dynamic_rate(x->p_attack_adapt);
+        post("torch.spectrails~: attackadapt set to %.6f", x->p_attack_adapt);
+    }
+}
+
 // --- PD Class Setup --
 extern "C" void setup_torch0x2espectrails_tilde(void) {
         torch_spectrails_tilde_class = class_new(gensym("torch.spectrails~"),
@@ -365,6 +429,10 @@ extern "C" void setup_torch0x2espectrails_tilde(void) {
                        gensym("threshold"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_attack, 
                        gensym("attack"), A_FLOAT, 0);
+        class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_phaseattack, 
+                   gensym("phaseattack"), A_FLOAT, 0);
+        class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_phaseattack, 
+                   gensym("phase_attack"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_decay, 
                        gensym("decay"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_decay6db, 
@@ -379,9 +447,13 @@ extern "C" void setup_torch0x2espectrails_tilde(void) {
                        gensym("reset"), A_NULL, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_hopsize, 
                    gensym("hopsize"), A_FLOAT, 0);
+        class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_attackadapt, 
+               gensym("attackadapt"), A_FLOAT, 0);
+        class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_attackadapt, 
+               gensym("attackcurve"), A_FLOAT, 0);
 
         post("torch.spectrails~: Spectral Trails Processor v1.0");
         post("  Use with torch.rfft~ and torch.irfft~ inside pfft~");
-        post("  Parameters: @threshold @attack @decay @limiter @maxvalue");
+        post("  Parameters: @threshold @attack @phaseattack @attackadapt @decay @decay6db @limiter @maxvalue @hopsize");
     
 }

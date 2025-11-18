@@ -4,6 +4,7 @@
 #include <torch/torch.h>
 #include <string>
 #include <stdexcept>
+#include <algorithm>
 
 namespace contorchionist {
     namespace core {
@@ -70,6 +71,13 @@ public:
     void set_attack(T attack);
 
     /**
+     * @brief Set the attack coefficient for phase interpolation.
+     *        Defaults to the same value as magnitude attack.
+     * @param attack_phase Phase attack coefficient
+     */
+    void set_phase_attack(T attack_phase);
+
+    /**
      * @brief Set the decay factor (0.0 to 1.0)
      * Higher values = slower decay (closer to 1.0 means longer trails)
      * @param decay Decay factor per frame
@@ -98,6 +106,13 @@ public:
     void set_max_value(T max_value);
 
     /**
+     * @brief Configure how strongly the attack adapts per-bin based on the difference between input and memory.
+     *        A value of 0 retains the global attack, higher values move the attack towards 1.0 more aggressively.
+     * @param rate Non-negative adaptation rate.
+     */
+    void set_attack_dynamic_rate(T rate);
+
+    /**
      * @brief Resize the processor for a different FFT size
      * @param num_bins New number of bins
      */
@@ -112,7 +127,9 @@ public:
 
     T get_threshold() const { return threshold_; }
     T get_attack() const { return attack_; }
+    T get_phase_attack() const { return attack_phase_; }
     T get_decay() const { return decay_; }
+    T get_attack_dynamic_rate() const { return attack_dynamic_rate_; }
     bool is_limiter_enabled() const { return limiter_enabled_; }
     T get_max_value() const { return max_value_; }
     torch::Device get_device() const { return device_; }
@@ -131,9 +148,12 @@ private:
     // Parameters
     T threshold_;
     T attack_;
+    T attack_phase_;
     T decay_;
+    T attack_dynamic_rate_;
     bool limiter_enabled_;
     T max_value_;
+    bool phase_attack_overridden_;
 
     // Memory tensors
     torch::Tensor memory_magnitude_;
@@ -158,10 +178,13 @@ SpectralTrailsProcessor<T>::SpectralTrailsProcessor(
       device_(device),
       verbose_(verbose),
       threshold_(static_cast<T>(0.01)),
-      attack_(static_cast<T>(0.8)),
+    attack_(static_cast<T>(0.8)),
+    attack_phase_(static_cast<T>(0.8)),
       decay_(static_cast<T>(0.999)),
       limiter_enabled_(false),
-      max_value_(static_cast<T>(1.0))
+    max_value_(static_cast<T>(1.0)),
+    phase_attack_overridden_(false),
+    attack_dynamic_rate_(static_cast<T>(0.0))
 {
     if (num_bins_ == 0) {
         throw std::invalid_argument("SpectralTrailsProcessor: num_bins must be > 0");
@@ -234,9 +257,19 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     torch::Tensor above_memory = mag_in > memory_magnitude_;
     torch::Tensor reinforce_mask = above_threshold & above_memory;
 
-    // 3. Apply attack (EMA) for reinforced bins
-    // memory = attack * input + (1 - attack) * memory, but only where mask is true
-    torch::Tensor attack_update = attack_ * mag_in + (1.0f - attack_) * memory_magnitude_;
+    // 3. Apply per-bin adaptive attack (EMA) for reinforced bins
+    torch::Tensor mag_attack_tensor = torch::full_like(mag_in, attack_);
+    torch::Tensor adaptive_factor;
+    bool use_adaptive_attack = attack_dynamic_rate_ > static_cast<T>(0.0);
+
+    if (use_adaptive_attack) {
+        adaptive_factor = 1.0f - torch::exp(-torch::abs(mag_in - memory_magnitude_) * attack_dynamic_rate_);
+        mag_attack_tensor = mag_attack_tensor + (1.0f - mag_attack_tensor) * adaptive_factor;
+    }
+
+    mag_attack_tensor = torch::clamp(mag_attack_tensor, 0.0f, 1.0f);
+
+    torch::Tensor attack_update = mag_attack_tensor * mag_in + (1.0f - mag_attack_tensor) * memory_magnitude_;
     memory_magnitude_ = torch::where(reinforce_mask, attack_update, memory_magnitude_);
 
     // 4. Apply limiter if enabled
@@ -253,7 +286,15 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     phase_diff = torch::atan2(torch::sin(phase_diff), torch::cos(phase_diff));
     
     // Apply attack smoothing to phase as well (using same attack coefficient)
-    auto phase_update = memory_phase_ + attack_ * phase_diff;
+    torch::Tensor phase_attack_tensor = torch::full_like(phase_diff, attack_phase_);
+
+    if (use_adaptive_attack) {
+        phase_attack_tensor = phase_attack_tensor + (1.0f - phase_attack_tensor) * adaptive_factor;
+    }
+
+    phase_attack_tensor = torch::clamp(phase_attack_tensor, 0.0f, 1.0f);
+
+    auto phase_update = memory_phase_ + phase_attack_tensor * phase_diff;
     
     // Update phase only where bins are being reinforced
     memory_phase_ = torch::where(reinforce_mask, phase_update, memory_phase_);
@@ -279,7 +320,17 @@ void SpectralTrailsProcessor<T>::set_threshold(T threshold) {
 template<typename T>
 void SpectralTrailsProcessor<T>::set_attack(T attack) {
     attack_ = std::clamp(attack, static_cast<T>(0.0), static_cast<T>(1.0));
+    if (!phase_attack_overridden_) {
+        attack_phase_ = attack_;
+    }
     log("Attack set to: " + std::to_string(attack_));
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_phase_attack(T attack_phase) {
+    attack_phase_ = std::clamp(attack_phase, static_cast<T>(0.0), static_cast<T>(1.0));
+    phase_attack_overridden_ = true;
+    log("Phase attack set to: " + std::to_string(attack_phase_));
 }
 
 template<typename T>
@@ -321,6 +372,12 @@ template<typename T>
 void SpectralTrailsProcessor<T>::set_max_value(T max_value) {
     max_value_ = std::max(static_cast<T>(0.0), max_value);
     log("Max value set to: " + std::to_string(max_value_));
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_attack_dynamic_rate(T rate) {
+    attack_dynamic_rate_ = std::max(static_cast<T>(0.0), rate);
+    log("Attack dynamic rate set to: " + std::to_string(attack_dynamic_rate_));
 }
 
 template<typename T>
