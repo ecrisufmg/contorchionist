@@ -25,6 +25,7 @@ typedef struct _torch_spectrails_tilde {
     float p_decay6db;
     bool p_limiter_enabled;
     float p_max_value;
+    float p_limiter_softness;
     float p_sample_rate;
     float p_hop_size;
     float p_attack_adapt;
@@ -52,6 +53,7 @@ static void torch_spectrails_tilde_decay(t_torch_spectrails_tilde *x, t_floatarg
 static void torch_spectrails_tilde_decay6db(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_decay6b(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_limiter(t_torch_spectrails_tilde *x, t_floatarg f);
+static void torch_spectrails_tilde_limitersoft(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_maxvalue(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_reset(t_torch_spectrails_tilde *x);
 static void torch_spectrails_tilde_hopsize(t_torch_spectrails_tilde *x, t_floatarg f);
@@ -204,6 +206,7 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     x->p_decay6db = parser.get_float("decay6db", -1.0f);
     x->p_limiter_enabled = static_cast<bool>(parser.get_float("limiter", 0.0f));
     x->p_max_value = parser.get_float("maxvalue", 1.0f);
+    x->p_limiter_softness = parser.get_float("limitersoft limitersmooth", 0.0f);
     x->p_hop_size = parser.get_float("hopsize", static_cast<float>(x->p_fft_size));
     if (x->p_hop_size <= 0.0f) {
         x->p_hop_size = static_cast<float>(x->p_fft_size);
@@ -219,6 +222,10 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
         x->p_phase_attack = 0.0f;
     } else if (x->p_phase_attack > 1.0f) {
         x->p_phase_attack = 1.0f;
+    }
+
+    if (x->p_limiter_softness < 0.0f) {
+        x->p_limiter_softness = 0.0f;
     }
 
     x->p_sample_rate = sys_getsr();
@@ -249,6 +256,7 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
         x->processor->set_decay(x->p_decay);
         x->processor->set_limiter_enabled(x->p_limiter_enabled);
         x->processor->set_max_value(x->p_max_value);
+        x->processor->set_limiter_softness(x->p_limiter_softness);
         x->processor->set_attack_dynamic_rate(x->p_attack_adapt);
 
         if (x->p_decay6db > 0.0f) {
@@ -285,6 +293,7 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     }
     post("  Limiter: %s", x->p_limiter_enabled ? "ON" : "OFF");
     post("  Max Value: %.6f", x->p_max_value);
+    post("  Limiter Softness: %.6f", x->p_limiter_softness);
     post("=====================================");
 
     return (void *)x;
@@ -369,6 +378,18 @@ static void torch_spectrails_tilde_limiter(t_torch_spectrails_tilde *x, t_floata
     }
 }
 
+static void torch_spectrails_tilde_limitersoft(t_torch_spectrails_tilde *x, t_floatarg f) {
+    if (f < 0.0f) {
+        f = 0.0f;
+    }
+
+    x->p_limiter_softness = f;
+    if (x->processor) {
+        x->processor->set_limiter_softness(x->p_limiter_softness);
+        post("torch.spectrails~: limiter softness set to %.6f", x->p_limiter_softness);
+    }
+}
+
 static void torch_spectrails_tilde_maxvalue(t_torch_spectrails_tilde *x, t_floatarg f) {
     x->p_max_value = f;
     if (x->processor) {
@@ -441,6 +462,10 @@ extern "C" void setup_torch0x2espectrails_tilde(void) {
                gensym("decay6b"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_limiter, 
                        gensym("limiter"), A_FLOAT, 0);
+        class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_limitersoft, 
+                   gensym("limitersoft"), A_FLOAT, 0);
+        class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_limitersoft, 
+                   gensym("limitersmooth"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_maxvalue, 
                        gensym("maxvalue"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_reset, 
@@ -454,6 +479,6 @@ extern "C" void setup_torch0x2espectrails_tilde(void) {
 
         post("torch.spectrails~: Spectral Trails Processor v1.0");
         post("  Use with torch.rfft~ and torch.irfft~ inside pfft~");
-        post("  Parameters: @threshold @attack @phaseattack @attackadapt @decay @decay6db @limiter @maxvalue @hopsize");
+        post("  Parameters: @threshold @attack @phaseattack @attackadapt @decay @decay6db @limiter @limitersoft @maxvalue @hopsize");
     
 }

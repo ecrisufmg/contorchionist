@@ -24,6 +24,7 @@ Este documento organiza a evolução planejada do `SpectralTrailsProcessor` e do
 - **Abordagem**:
   - Substituir o clamp rígido por uma função suave (tanh, soft knee ou normalização relativa ao pico recente).
   - Permitir ajuste de intensidade/compressão.
+  - Implementado: parâmetro `@limitersoft` (alias `@limitersmooth`) aplica joelho racional `over / (1 + k·over)` mantendo continuidade; testar valores típicos `0.1`–`2.0` e registrar comportamento extremo.
   - Garantir que a energia média permaneça próxima dos valores originais.
 
 ## Prioridade 4 — Reset parcial inteligente

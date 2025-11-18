@@ -17,7 +17,7 @@ function(copy_core_libs_to_wrapper_dist)
     # Copy contorchionist_core library
     add_custom_command(
         TARGET ${COPY_LIBS_TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:contorchionist_core>
         ${COPY_LIBS_DIST_DIR}
         COMMENT "Copying contorchionist_core shared library to ${COPY_LIBS_DIST_DIR}"
