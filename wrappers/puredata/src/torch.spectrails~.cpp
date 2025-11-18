@@ -5,6 +5,7 @@
 #include <memory>
 #include <vector>
 #include <exception>
+#include <cmath>
 
 // Define the C-style struct for the Pd tilde object
 typedef struct _torch_spectrails_tilde {
@@ -20,8 +21,12 @@ typedef struct _torch_spectrails_tilde {
     float p_threshold;
     float p_attack;
     float p_decay;
+    float p_decay6db;
     bool p_limiter_enabled;
     float p_max_value;
+    float p_sample_rate;
+    float p_hop_size;
+    bool p_use_decay6db;
     size_t p_num_bins; // N/2 + 1
     size_t p_fft_size; // Full FFT size (N)
 
@@ -40,9 +45,12 @@ static t_int *torch_spectrails_tilde_perform(t_int *w);
 static void torch_spectrails_tilde_threshold(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_attack(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_decay(t_torch_spectrails_tilde *x, t_floatarg f);
+static void torch_spectrails_tilde_decay6db(t_torch_spectrails_tilde *x, t_floatarg f);
+static void torch_spectrails_tilde_decay6b(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_limiter(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_maxvalue(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_reset(t_torch_spectrails_tilde *x);
+static void torch_spectrails_tilde_hopsize(t_torch_spectrails_tilde *x, t_floatarg f);
 
 
 // --- DSP Routine ---
@@ -138,6 +146,24 @@ static void torch_spectrails_tilde_dsp(t_torch_spectrails_tilde *x, t_signal **s
         }
     }
 
+    // Update sample rate from the signal chain if available
+    if (sp[0]->s_sr > 0) {
+        float new_sr = sp[0]->s_sr;
+        if (std::abs(new_sr - x->p_sample_rate) > 1e-6f) {
+            x->p_sample_rate = new_sr;
+            if (x->p_use_decay6db && x->processor) {
+                x->processor->set_decay_time_s(x->p_decay6db, x->p_sample_rate, x->p_hop_size);
+                x->p_decay = x->processor->get_decay();
+                post("torch.spectrails~: decay factor recalculated from decay6db (sample rate change).");
+            }
+        }
+    }
+
+    if (x->p_use_decay6db && x->processor) {
+        x->processor->set_decay_time_s(x->p_decay6db, x->p_sample_rate, x->p_hop_size);
+        x->p_decay = x->processor->get_decay();
+    }
+
     dsp_add(torch_spectrails_tilde_perform, 6, x, 
             sp[0]->s_vec,  // in_mag
             sp[1]->s_vec,  // in_phase
@@ -169,8 +195,19 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     x->p_threshold = parser.get_float("threshold", 0.01f);
     x->p_attack = parser.get_float("attack", 0.8f);
     x->p_decay = parser.get_float("decay", 0.999f);
+    x->p_decay6db = parser.get_float("decay6db", -1.0f);
     x->p_limiter_enabled = static_cast<bool>(parser.get_float("limiter", 0.0f));
     x->p_max_value = parser.get_float("maxvalue", 1.0f);
+    x->p_hop_size = parser.get_float("hopsize", static_cast<float>(x->p_fft_size));
+    if (x->p_hop_size <= 0.0f) {
+        x->p_hop_size = static_cast<float>(x->p_fft_size);
+    }
+
+    x->p_sample_rate = sys_getsr();
+    if (x->p_sample_rate <= 0.0f) {
+        x->p_sample_rate = 48000.0f;
+    }
+    x->p_use_decay6db = false;
 
     // Instantiate the C++ processor
     try {
@@ -186,6 +223,12 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
         x->processor->set_decay(x->p_decay);
         x->processor->set_limiter_enabled(x->p_limiter_enabled);
         x->processor->set_max_value(x->p_max_value);
+
+        if (x->p_decay6db > 0.0f) {
+            x->processor->set_decay_time_s(x->p_decay6db, x->p_sample_rate, x->p_hop_size);
+            x->p_decay = x->processor->get_decay();
+            x->p_use_decay6db = true;
+        }
 
     } catch (const std::exception& e) {
         pd_error(x, "torch.spectrails~: Exception during processor creation: %s", e.what());
@@ -203,9 +246,14 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     post("torch.spectrails~: ===== Object Created =====");
     post("  FFT Size: %zu", x->p_fft_size);
     post("  Num Bins: %zu", x->p_num_bins);
+    post("  Sample Rate: %.2f", x->p_sample_rate);
+    post("  Hop Size: %.2f", x->p_hop_size);
     post("  Threshold: %.6f", x->p_threshold);
     post("  Attack: %.6f", x->p_attack);
     post("  Decay: %.6f", x->p_decay);
+    if (x->p_use_decay6db) {
+        post("  Decay6dB: %.6f s", x->p_decay6db);
+    }
     post("  Limiter: %s", x->p_limiter_enabled ? "ON" : "OFF");
     post("  Max Value: %.6f", x->p_max_value);
     post("=====================================");
@@ -235,8 +283,30 @@ static void torch_spectrails_tilde_decay(t_torch_spectrails_tilde *x, t_floatarg
     x->p_decay = f;
     if (x->processor) {
         x->processor->set_decay(x->p_decay);
+        x->p_use_decay6db = false;
+        x->p_decay6db = -1.0f;
         post("torch.spectrails~: decay set to %.6f", x->p_decay);
     }
+}
+
+static void torch_spectrails_tilde_decay6db(t_torch_spectrails_tilde *x, t_floatarg f) {
+    if (f <= 0.0f) {
+        pd_error(x, "torch.spectrails~: decay6db requires a positive time in seconds");
+        return;
+    }
+
+    x->p_decay6db = f;
+    x->p_use_decay6db = true;
+    if (x->processor) {
+        x->processor->set_decay_time_s(x->p_decay6db, x->p_sample_rate, x->p_hop_size);
+        x->p_decay = x->processor->get_decay();
+        post("torch.spectrails~: decay6db set to %.6f s (decay factor=%.6f)", x->p_decay6db, x->p_decay);
+    }
+}
+
+static void torch_spectrails_tilde_decay6b(t_torch_spectrails_tilde *x, t_floatarg f) {
+    post("torch.spectrails~: alias 'decay6b' treated as 'decay6db'");
+    torch_spectrails_tilde_decay6db(x, f);
 }
 
 static void torch_spectrails_tilde_limiter(t_torch_spectrails_tilde *x, t_floatarg f) {
@@ -262,6 +332,21 @@ static void torch_spectrails_tilde_reset(t_torch_spectrails_tilde *x) {
     }
 }
 
+static void torch_spectrails_tilde_hopsize(t_torch_spectrails_tilde *x, t_floatarg f) {
+    if (f <= 0.0f) {
+        pd_error(x, "torch.spectrails~: hopsize requires a positive value");
+        return;
+    }
+
+    x->p_hop_size = f;
+    post("torch.spectrails~: hopsize set to %.2f", x->p_hop_size);
+    if (x->p_use_decay6db && x->processor) {
+        x->processor->set_decay_time_s(x->p_decay6db, x->p_sample_rate, x->p_hop_size);
+        x->p_decay = x->processor->get_decay();
+        post("torch.spectrails~: decay factor recalculated from decay6db after hopsize update (%.6f)", x->p_decay);
+    }
+}
+
 // --- PD Class Setup --
 extern "C" void setup_torch0x2espectrails_tilde(void) {
         torch_spectrails_tilde_class = class_new(gensym("torch.spectrails~"),
@@ -282,12 +367,18 @@ extern "C" void setup_torch0x2espectrails_tilde(void) {
                        gensym("attack"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_decay, 
                        gensym("decay"), A_FLOAT, 0);
+        class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_decay6db, 
+                   gensym("decay6db"), A_FLOAT, 0);
+        class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_decay6b, 
+               gensym("decay6b"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_limiter, 
                        gensym("limiter"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_maxvalue, 
                        gensym("maxvalue"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_reset, 
                        gensym("reset"), A_NULL, 0);
+        class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_hopsize, 
+                   gensym("hopsize"), A_FLOAT, 0);
 
         post("torch.spectrails~: Spectral Trails Processor v1.0");
         post("  Use with torch.rfft~ and torch.irfft~ inside pfft~");

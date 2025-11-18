@@ -77,6 +77,14 @@ public:
     void set_decay(T decay);
 
     /**
+     * @brief Sets the decay factor using a time in seconds for a -6 dB drop.
+     * @param time_s Time, in seconds, for the magnitude to reach half its value.
+     * @param sample_rate The current sample rate.
+     * @param hop_size The hop size between frames.
+     */
+    void set_decay_time_s(T time_s, T sample_rate, T hop_size);
+
+    /**
      * @brief Enable or disable the limiter
      * When enabled, prevents bins from exceeding max_value
      * @param enabled Enable limiter
@@ -278,6 +286,29 @@ template<typename T>
 void SpectralTrailsProcessor<T>::set_decay(T decay) {
     decay_ = std::clamp(decay, static_cast<T>(0.0), static_cast<T>(1.0));
     log("Decay set to: " + std::to_string(decay_));
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_decay_time_s(T time_s, T sample_rate, T hop_size) {
+    if (time_s <= static_cast<T>(0.0) || sample_rate <= static_cast<T>(0.0) || hop_size <= static_cast<T>(0.0)) {
+        log("set_decay_time_s ignored: invalid parameters");
+        return;
+    }
+
+    T frames_per_second = sample_rate / hop_size;
+    if (frames_per_second <= static_cast<T>(0.0)) {
+        log("set_decay_time_s ignored: frames_per_second <= 0");
+        return;
+    }
+
+    T total_frames = time_s * frames_per_second;
+    if (total_frames <= static_cast<T>(0.0)) {
+        log("set_decay_time_s ignored: total_frames <= 0");
+        return;
+    }
+
+    decay_ = std::pow(static_cast<T>(0.5), static_cast<T>(1.0) / total_frames);
+    log("Decay set from decay6db: " + std::to_string(decay_) + " (time_s=" + std::to_string(time_s) + ", frames_per_second=" + std::to_string(frames_per_second) + ")");
 }
 
 template<typename T>
