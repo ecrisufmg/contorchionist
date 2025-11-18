@@ -453,9 +453,22 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
         if (attack_onset_ramp_frames_ > 0) {
             auto active_mask = onset_ramp_active_ > 0.5f;
             float ramp_frames = static_cast<float>(std::max(attack_onset_ramp_frames_, 1));
-            auto increment = torch::where(active_mask, onset_ramp_progress_ + 1.0f, onset_ramp_progress_);
+
+            auto progress = torch::where(active_mask, onset_ramp_progress_, torch::zeros_like(onset_ramp_progress_));
+            auto progress_norm = torch::clamp(progress / ramp_frames, 0.0f, 1.0f);
+
+            const float sigmoid_steepness = 8.0f;
+            const float sigmoid_low = 1.0f / (1.0f + std::exp(sigmoid_steepness * 0.5f));
+            const float sigmoid_high = 1.0f / (1.0f + std::exp(-sigmoid_steepness * 0.5f));
+            const float sigmoid_range = std::max(std::numeric_limits<float>::epsilon(), sigmoid_high - sigmoid_low);
+
+            auto logistic = torch::sigmoid((progress_norm - 0.5f) * sigmoid_steepness);
+            auto eased = torch::clamp((logistic - sigmoid_low) / sigmoid_range, 0.0f, 1.0f);
+
+            onset_weight = torch::where(active_mask, eased, torch::zeros_like(eased));
+
+            auto increment = torch::where(active_mask, progress + 1.0f, onset_ramp_progress_);
             onset_ramp_progress_ = torch::where(active_mask, torch::clamp(increment, 0.0f, ramp_frames), onset_ramp_progress_);
-            onset_weight = torch::where(active_mask, onset_ramp_progress_ / ramp_frames, torch::zeros_like(onset_ramp_progress_));
 
             auto done_mask = onset_ramp_progress_ >= ramp_frames;
             auto deactivate_mask = done_mask | torch::logical_not(above_threshold);

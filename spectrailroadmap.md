@@ -17,6 +17,7 @@ Este documento organiza a evolução planejada do `SpectralTrailsProcessor` e do
   - `@onsetfloor` define o piso que caracteriza “novo bin” (base para o gatilho de `@attackonset`).
   - `@resetframes` conta quantos frames consecutivos um bin passou abaixo do `threshold`; ao atingir o valor configurado, o reset parcial é disparado.
   - `@resetmult` define o multiplicador aplicado quando o reset parcial acontece (0 limpa completamente, 1 não altera o bin, valores intermediários aceleram o decaimento).
+  - Rampas de `@attackonsetramp` agora usam easing sigmoidal normalizado para suavizar a subida dos primeiros frames e eliminar degraus abruptos.
 - **Próximos passos**:
   - Refinar curvas adaptativas para graves/agudos se ainda houver ruído perceptível.
   - Medir audições A/B com e sem `attackonset` para ajustar valores padrão.
