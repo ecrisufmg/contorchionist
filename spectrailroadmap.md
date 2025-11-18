@@ -2,14 +2,14 @@
 
 Este documento organiza a evolução planejada do `SpectralTrailsProcessor` e do wrapper `torch.spectrails~`, com foco em tornar o objeto robusto para sinais variáveis e minimizar artefatos de ataque. As entregas estão ordenadas por prioridade.
 
-## Prioridade 1 — Decaimento configurável por segundos (`decay6db`)
+## Prioridade 1 — Decaimento configurável por segundos (`decay6db`) OK
 - **Objetivo**: permitir definir o tempo, em segundos, para que cada bin decaia -6 dB (redução para 50% do valor).
 - **Abordagem**:
   - Manter o parâmetro atual `decay` (fator por frame) para compatibilidade.
   - Introduzir `decay6db`; ao recebê-lo, calcular `decay_factor = pow(0.5, 1.0 / (time_s * frames_per_second))`, onde `frames_per_second = sample_rate / hop_size`.
   - Atualizar o wrapper PD (`@decay6db`, mensagem `decay6db <f>`) e validar a coexistência com o modo antigo.
 
-## Prioridade 2 — Ataque independente por bin
+## Prioridade 2 — Ataque independente por bin (ainda ruim)
 - **Objetivo**: reduzir saltos na ativação de novos bins sem depender de `maxvalue` extremamente baixo.
 - **Abordagem**:
   - Manter tempos de ataque separados para magnitude e fase.
@@ -19,7 +19,7 @@ Este documento organiza a evolução planejada do `SpectralTrailsProcessor` e do
   - Mapear uma tabela de coeficientes por faixa de frequência para tratar graves e agudos com suavizações diferentes (se necessário).
   - Expor novos parâmetros conforme necessário e medir a redução de artefatos auditivos.
 
-## Prioridade 3 — Limiter suave
+## Prioridade 3 — Limiter suave OK
 - **Objetivo**: controlar picos sem “achatamento” abrupto da memória.
 - **Abordagem**:
   - Substituir o clamp rígido por uma função suave (tanh, soft knee ou normalização relativa ao pico recente).
