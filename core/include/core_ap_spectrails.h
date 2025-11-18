@@ -5,6 +5,7 @@
 #include <string>
 #include <stdexcept>
 #include <algorithm>
+#include <limits>
 
 namespace contorchionist {
     namespace core {
@@ -113,6 +114,13 @@ public:
     void set_attack_dynamic_rate(T rate);
 
     /**
+     * @brief Control the softness of the limiter knee.
+     *        0 keeps the legacy hard clamp; higher values progressively smooth the limiting curve.
+     * @param softness Non-negative softness value.
+     */
+    void set_limiter_softness(T softness);
+
+    /**
      * @brief Resize the processor for a different FFT size
      * @param num_bins New number of bins
      */
@@ -132,6 +140,7 @@ public:
     T get_attack_dynamic_rate() const { return attack_dynamic_rate_; }
     bool is_limiter_enabled() const { return limiter_enabled_; }
     T get_max_value() const { return max_value_; }
+    T get_limiter_softness() const { return limiter_softness_; }
     torch::Device get_device() const { return device_; }
     size_t get_num_bins() const { return num_bins_; }
 
@@ -153,6 +162,7 @@ private:
     T attack_dynamic_rate_;
     bool limiter_enabled_;
     T max_value_;
+    T limiter_softness_;
     bool phase_attack_overridden_;
 
     // Memory tensors
@@ -174,17 +184,18 @@ SpectralTrailsProcessor<T>::SpectralTrailsProcessor(
     torch::Device device,
     bool verbose
 )
-    : num_bins_(num_bins),
-      device_(device),
-      verbose_(verbose),
-      threshold_(static_cast<T>(0.01)),
-    attack_(static_cast<T>(0.8)),
-    attack_phase_(static_cast<T>(0.8)),
-      decay_(static_cast<T>(0.999)),
-      limiter_enabled_(false),
-    max_value_(static_cast<T>(1.0)),
-    phase_attack_overridden_(false),
-    attack_dynamic_rate_(static_cast<T>(0.0))
+        : num_bins_(num_bins),
+            device_(device),
+            verbose_(verbose),
+            threshold_(static_cast<T>(0.01)),
+            attack_(static_cast<T>(0.8)),
+            attack_phase_(static_cast<T>(0.8)),
+            decay_(static_cast<T>(0.999)),
+            attack_dynamic_rate_(static_cast<T>(0.0)),
+            limiter_enabled_(false),
+            max_value_(static_cast<T>(1.0)),
+            limiter_softness_(static_cast<T>(0.0)),
+            phase_attack_overridden_(false)
 {
     if (num_bins_ == 0) {
         throw std::invalid_argument("SpectralTrailsProcessor: num_bins must be > 0");
@@ -274,7 +285,14 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
 
     // 4. Apply limiter if enabled
     if (limiter_enabled_) {
-        memory_magnitude_ = torch::clamp(memory_magnitude_, 0.0f, max_value_);
+        if (limiter_softness_ <= static_cast<T>(0.0)) {
+            memory_magnitude_ = torch::clamp(memory_magnitude_, 0.0f, max_value_);
+        } else {
+            auto over = torch::relu(memory_magnitude_ - max_value_);
+            auto softened = max_value_ + over / (1.0f + limiter_softness_ * over);
+            memory_magnitude_ = torch::where(memory_magnitude_ > max_value_, softened, memory_magnitude_);
+            memory_magnitude_ = torch::clamp(memory_magnitude_, 0.0f, std::numeric_limits<float>::max());
+        }
     }
 
     // 5. Smooth phase interpolation for reinforced bins to avoid clicks
@@ -378,6 +396,12 @@ template<typename T>
 void SpectralTrailsProcessor<T>::set_attack_dynamic_rate(T rate) {
     attack_dynamic_rate_ = std::max(static_cast<T>(0.0), rate);
     log("Attack dynamic rate set to: " + std::to_string(attack_dynamic_rate_));
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_limiter_softness(T softness) {
+    limiter_softness_ = std::max(static_cast<T>(0.0), softness);
+    log("Limiter softness set to: " + std::to_string(limiter_softness_));
 }
 
 template<typename T>
