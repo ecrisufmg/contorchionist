@@ -24,6 +24,7 @@ RESIDUAL_SPEC_PATH = ROOT / "diagnostics_residual.png"
 
 N_FFT = 8192
 HOP_LENGTH = 2048
+GRID_SPACING_SAMPLES = 2048
 TOP_K = 15
 
 
@@ -109,14 +110,14 @@ def main() -> int:
 
     # Plot waveforms with hop grid
     times = np.arange(min_len) / float(sr)
-    hop_times = np.arange(0, len(in_rms) + 1) * HOP_LENGTH / float(sr)
+    grid_times = np.arange(0, min_len + GRID_SPACING_SAMPLES, GRID_SPACING_SAMPLES) / float(sr)
 
     fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
     data_list = [(x, "Input"), (y, "Output"), (residual, "Residual (output - input)")]
     for ax, (sig, title) in zip(axes, data_list):
         ax.plot(times, sig, linewidth=0.6)
         ax.set_ylabel(title)
-        for t in hop_times:
+        for t in grid_times:
             ax.axvline(t, color="gray", linewidth=0.3, alpha=0.4)
         ax.grid(True, which="both", axis="x", linestyle="--", linewidth=0.2, alpha=0.5)
     axes[-1].set_xlabel("Tempo (s)")

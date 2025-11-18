@@ -246,6 +246,15 @@ private:
     torch::Tensor onset_ramp_progress_;
     torch::Tensor onset_ramp_active_;
 
+    // Pending buffers for onset crossfade
+    torch::Tensor pending_magnitude_;
+    torch::Tensor pending_phase_;
+    torch::Tensor pending_active_;
+    torch::Tensor pending_hold_counts_;
+    int pending_hold_frames_;
+    T pending_release_epsilon_mag_;
+    T pending_release_epsilon_phase_;
+
     // Memory tensors
     torch::Tensor memory_magnitude_;
     torch::Tensor memory_phase_;
@@ -295,7 +304,14 @@ SpectralTrailsProcessor<T>::SpectralTrailsProcessor(
             below_threshold_counts_(),
             above_threshold_counts_(),
             onset_ramp_progress_(),
-            onset_ramp_active_()
+            onset_ramp_active_(),
+            pending_magnitude_(),
+            pending_phase_(),
+            pending_active_(),
+            pending_hold_counts_(),
+            pending_hold_frames_(2),
+            pending_release_epsilon_mag_(static_cast<T>(5e-3)),
+            pending_release_epsilon_phase_(static_cast<T>(0.05))
 {
     if (num_bins_ == 0) {
         throw std::invalid_argument("SpectralTrailsProcessor: num_bins must be > 0");
@@ -309,6 +325,10 @@ SpectralTrailsProcessor<T>::SpectralTrailsProcessor(
     above_threshold_counts_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
     onset_ramp_progress_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
     onset_ramp_active_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    pending_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    pending_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    pending_active_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    pending_hold_counts_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
 
     log("SpectralTrailsProcessor initialized with " + std::to_string(num_bins_) + " bins on device: " + device_.str());
 }
@@ -344,6 +364,18 @@ void SpectralTrailsProcessor<T>::set_device(torch::Device device) {
     }
     if (onset_ramp_active_.defined()) {
         onset_ramp_active_ = onset_ramp_active_.to(device_);
+    }
+    if (pending_magnitude_.defined()) {
+        pending_magnitude_ = pending_magnitude_.to(device_);
+    }
+    if (pending_phase_.defined()) {
+        pending_phase_ = pending_phase_.to(device_);
+    }
+    if (pending_active_.defined()) {
+        pending_active_ = pending_active_.to(device_);
+    }
+    if (pending_hold_counts_.defined()) {
+        pending_hold_counts_ = pending_hold_counts_.to(device_);
     }
 
     log("Device changed to: " + device_.str());
@@ -389,6 +421,18 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     ensure_tracking_tensor(above_threshold_counts_);
     ensure_tracking_tensor(onset_ramp_progress_);
     ensure_tracking_tensor(onset_ramp_active_);
+    ensure_tracking_tensor(pending_magnitude_);
+    ensure_tracking_tensor(pending_phase_);
+    ensure_tracking_tensor(pending_active_);
+    ensure_tracking_tensor(pending_hold_counts_);
+
+    auto ensure_pending_defaults = [&](torch::Tensor& tensor, float value) {
+        if (!tensor.defined() || tensor.sizes() != memory_magnitude_.sizes()) {
+            tensor = torch::full_like(memory_magnitude_, value);
+        }
+    };
+    ensure_pending_defaults(pending_active_, 0.0f);
+    ensure_pending_defaults(pending_hold_counts_, 0.0f);
 
     torch::Tensor below_threshold_mask = mag_in <= threshold_;
 
@@ -486,8 +530,8 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     torch::Tensor ramp_factor = torch::ones_like(mag_in);
     torch::Tensor ramp_factor_phase = torch::ones_like(mag_in);
     if (attack_onset_ >= static_cast<T>(0.0) && attack_onset_ramp_frames_ > 0) {
-        auto active_mask = onset_ramp_active_ > 0.5f;
-        ramp_factor = torch::where(active_mask, onset_weight, ramp_factor);
+        auto ramp_active_mask = onset_ramp_active_ > 0.5f;
+        ramp_factor = torch::where(ramp_active_mask, onset_weight, ramp_factor);
         ramp_factor_phase = ramp_factor;
     }
 
@@ -533,16 +577,59 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     // Update phase only where bins are being reinforced
     memory_phase_ = torch::where(reinforce_mask, phase_update, memory_phase_);
 
+    // Pending onset handling
+    auto pending_zero = torch::zeros_like(memory_magnitude_);
+    auto pending_one = torch::ones_like(memory_magnitude_);
+
+    auto pending_active_mask = pending_active_ > 0.5f;
+    auto meme_small_mask = memory_magnitude_ <= onset_floor_;
+    auto pending_start_mask = torch::logical_and(above_threshold, meme_small_mask);
+    pending_start_mask = torch::logical_and(pending_start_mask, torch::logical_not(pending_active_mask));
+
+    pending_magnitude_ = torch::where(pending_start_mask, mag_in, pending_magnitude_);
+    pending_phase_ = torch::where(pending_start_mask, phase_in, pending_phase_);
+    pending_active_ = torch::where(pending_start_mask, pending_one, pending_active_);
+    pending_hold_counts_ = torch::where(pending_start_mask, pending_zero, pending_hold_counts_);
+
+    pending_active_mask = pending_active_ > 0.5f;
+    pending_hold_counts_ = torch::where(pending_active_mask, pending_hold_counts_ + 1.0f, pending_zero);
+
+    // Keep memory in sync with the current input while pending is active
+    memory_magnitude_ = torch::where(pending_active_mask, mag_in, memory_magnitude_);
+    memory_phase_ = torch::where(pending_active_mask, phase_in, memory_phase_);
+
+    float hold_frames = static_cast<float>(std::max(1, pending_hold_frames_));
+    auto hold_satisfied = pending_hold_counts_ >= hold_frames;
+    auto mag_close = torch::abs(memory_magnitude_ - pending_magnitude_) <= pending_release_epsilon_mag_;
+    auto phase_gap = memory_phase_ - pending_phase_;
+    phase_gap = torch::atan2(torch::sin(phase_gap), torch::cos(phase_gap));
+    auto phase_close = torch::abs(phase_gap) <= pending_release_epsilon_phase_;
+    auto release_mask = pending_active_mask & hold_satisfied & mag_close & phase_close;
+
+    memory_magnitude_ = torch::where(release_mask, pending_magnitude_, memory_magnitude_);
+    memory_phase_ = torch::where(release_mask, pending_phase_, memory_phase_);
+
+    pending_active_ = torch::where(release_mask, pending_zero, pending_active_);
+    pending_hold_counts_ = torch::where(release_mask, pending_zero, pending_hold_counts_);
+
+    pending_active_mask = pending_active_ > 0.5f;
+    torch::Tensor output_magnitude = torch::where(pending_active_mask, pending_magnitude_, memory_magnitude_);
+    torch::Tensor output_phase = torch::where(pending_active_mask, pending_phase_, memory_phase_);
+
     // 6. Force DC and Nyquist phase to zero
     if (num_bins_ > 0) {
         memory_phase_[0] = 0.0f; // DC component
         if (num_bins_ > 1) {
             memory_phase_[static_cast<long>(num_bins_) - 1] = 0.0f; // Nyquist component
+            output_phase[static_cast<long>(num_bins_) - 1] = 0.0f;
         }
+    }
+    if (num_bins_ > 0) {
+        output_phase[0] = 0.0f;
     }
 
     // Return processed magnitude and phase
-    return {memory_magnitude_.clone(), memory_phase_.clone()};
+    return {output_magnitude.clone(), output_phase.clone()};
 }
 
 template<typename T>
@@ -787,6 +874,18 @@ void SpectralTrailsProcessor<T>::reset_memory() {
     }
     if (onset_ramp_active_.defined()) {
         onset_ramp_active_.zero_();
+    }
+    if (pending_magnitude_.defined()) {
+        pending_magnitude_.zero_();
+    }
+    if (pending_phase_.defined()) {
+        pending_phase_.zero_();
+    }
+    if (pending_active_.defined()) {
+        pending_active_.zero_();
+    }
+    if (pending_hold_counts_.defined()) {
+        pending_hold_counts_.zero_();
     }
     log("Memory reset to zero");
 }
