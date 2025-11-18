@@ -52,6 +52,12 @@ public:
                 m_memory_phase[i] = phase_frame[i];
             }
         }
+
+        // 3. Force DC and Nyquist phase to zero
+        if (m_memory_phase.size() > 0) {
+            m_memory_phase[0] = static_cast<T>(0.0); // DC component
+            m_memory_phase.back() = static_cast<T>(0.0); // Nyquist component
+        }
     }
 
     /**
