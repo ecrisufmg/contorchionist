@@ -31,6 +31,12 @@ typedef struct _torch_spectrails_tilde {
     float p_attack_adapt;
     float p_attack_onset;
     float p_onset_floor;
+    float p_onset_hysteresis_ms;
+    int p_onset_hysteresis_frames;
+    bool p_onset_hysteresis_use_time;
+    float p_attack_onset_ramp_ms;
+    int p_attack_onset_ramp_frames;
+    bool p_attack_onset_ramp_use_time;
     int p_reset_frames;
     float p_reset_multiplier;
     bool p_use_decay6db;
@@ -64,8 +70,34 @@ static void torch_spectrails_tilde_hopsize(t_torch_spectrails_tilde *x, t_floata
 static void torch_spectrails_tilde_attackadapt(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_attackonset(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_onsetfloor(t_torch_spectrails_tilde *x, t_floatarg f);
+static void torch_spectrails_tilde_onsethyst(t_torch_spectrails_tilde *x, t_floatarg f);
+static void torch_spectrails_tilde_onsethystframes(t_torch_spectrails_tilde *x, t_floatarg f);
+static void torch_spectrails_tilde_attackonsetramp(t_torch_spectrails_tilde *x, t_floatarg f);
+static void torch_spectrails_tilde_attackonsetrampframes(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_resetframes(t_torch_spectrails_tilde *x, t_floatarg f);
 static void torch_spectrails_tilde_resetmult(t_torch_spectrails_tilde *x, t_floatarg f);
+static void torch_spectrails_tilde_frametiming(t_torch_spectrails_tilde *x, t_floatarg sr, t_floatarg hop);
+static void torch_spectrails_tilde_update_frame_timing(t_torch_spectrails_tilde *x);
+
+static void torch_spectrails_tilde_update_frame_timing(t_torch_spectrails_tilde *x) {
+    if (!x->processor || x->p_hop_size <= 0.0f) {
+        return;
+    }
+
+    x->processor->set_frame_timing(x->p_sample_rate, x->p_hop_size);
+
+    if (x->p_onset_hysteresis_use_time) {
+        x->processor->set_onset_hysteresis_time(x->p_onset_hysteresis_ms * 0.001f);
+    } else {
+        x->processor->set_onset_hysteresis_frames(x->p_onset_hysteresis_frames);
+    }
+
+    if (x->p_attack_onset_ramp_use_time) {
+        x->processor->set_attack_onset_ramp_time(x->p_attack_onset_ramp_ms * 0.001f);
+    } else {
+        x->processor->set_attack_onset_ramp_frames(x->p_attack_onset_ramp_frames);
+    }
+}
 
 
 // --- DSP Routine ---
@@ -161,23 +193,27 @@ static void torch_spectrails_tilde_dsp(t_torch_spectrails_tilde *x, t_signal **s
         }
     }
 
-    // Update sample rate from the signal chain if available
-    if (sp[0]->s_sr > 0) {
-        float new_sr = sp[0]->s_sr;
-        if (std::abs(new_sr - x->p_sample_rate) > 1e-6f) {
-            x->p_sample_rate = new_sr;
-            if (x->p_use_decay6db && x->processor) {
-                x->processor->set_decay_time_s(x->p_decay6db, x->p_sample_rate, x->p_hop_size);
-                x->p_decay = x->processor->get_decay();
-                post("torch.spectrails~: decay factor recalculated from decay6db (sample rate change).");
-            }
-        }
+    bool sr_changed = false;
+
+    float env_sr = sp[0]->s_sr > 0 ? sp[0]->s_sr : sys_getsr();
+    if (env_sr > 0.0f && std::abs(env_sr - x->p_sample_rate) > 1e-3f) {
+        x->p_sample_rate = env_sr;
+        sr_changed = true;
     }
 
-    if (x->p_use_decay6db && x->processor) {
+    bool hop_was_invalid = false;
+    if (x->p_hop_size <= 0.0f) {
+        x->p_hop_size = static_cast<float>(x->p_fft_size);
+        hop_was_invalid = true;
+    }
+
+    if (x->p_use_decay6db && x->processor && (sr_changed || hop_was_invalid)) {
         x->processor->set_decay_time_s(x->p_decay6db, x->p_sample_rate, x->p_hop_size);
         x->p_decay = x->processor->get_decay();
+        post("torch.spectrails~: decay factor recalculated from decay6db (timing update).");
     }
+
+    torch_spectrails_tilde_update_frame_timing(x);
 
     dsp_add(torch_spectrails_tilde_perform, 6, x, 
             sp[0]->s_vec,  // in_mag
@@ -215,7 +251,7 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     x->p_limiter_enabled = static_cast<bool>(parser.get_float("limiter", 0.0f));
     x->p_max_value = parser.get_float("maxvalue", 1.0f);
     x->p_limiter_softness = parser.get_float("limitersoft limitersmooth", 0.0f);
-    x->p_hop_size = parser.get_float("hopsize", static_cast<float>(x->p_fft_size));
+    x->p_hop_size = parser.get_float("hopsize hop", static_cast<float>(x->p_fft_size));
     if (x->p_hop_size <= 0.0f) {
         x->p_hop_size = static_cast<float>(x->p_fft_size);
     }
@@ -255,6 +291,24 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     if (x->p_onset_floor < 0.0f) {
         x->p_onset_floor = 0.0f;
     }
+    x->p_onset_hysteresis_ms = parser.get_float("onsethyst onset_hyst", 0.0f);
+    if (x->p_onset_hysteresis_ms < 0.0f) {
+        x->p_onset_hysteresis_ms = 0.0f;
+    }
+    x->p_onset_hysteresis_frames = static_cast<int>(parser.get_float("onsethystframes onset_hyst_frames", 1.0f));
+    if (x->p_onset_hysteresis_frames < 1) {
+        x->p_onset_hysteresis_frames = 1;
+    }
+    x->p_onset_hysteresis_use_time = x->p_onset_hysteresis_ms > 0.0f;
+    x->p_attack_onset_ramp_ms = parser.get_float("attackonsetramp attack_onset_ramp", 0.0f);
+    if (x->p_attack_onset_ramp_ms < 0.0f) {
+        x->p_attack_onset_ramp_ms = 0.0f;
+    }
+    x->p_attack_onset_ramp_frames = static_cast<int>(parser.get_float("attackonsetrampframes attack_onset_ramp_frames", 0.0f));
+    if (x->p_attack_onset_ramp_frames < 0) {
+        x->p_attack_onset_ramp_frames = 0;
+    }
+    x->p_attack_onset_ramp_use_time = x->p_attack_onset_ramp_ms > 0.0f;
     x->p_reset_frames = static_cast<int>(parser.get_float("resetframes reset_frames", 0.0f));
     if (x->p_reset_frames < 0) {
         x->p_reset_frames = 0;
@@ -291,6 +345,8 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
         x->processor->set_reset_frames(x->p_reset_frames);
         x->processor->set_reset_multiplier(x->p_reset_multiplier);
 
+        torch_spectrails_tilde_update_frame_timing(x);
+
         if (x->p_decay6db > 0.0f) {
             x->processor->set_decay_time_s(x->p_decay6db, x->p_sample_rate, x->p_hop_size);
             x->p_decay = x->processor->get_decay();
@@ -323,6 +379,16 @@ static void *torch_spectrails_tilde_new(t_symbol *s, int argc, t_atom *argv) {
         post("  Attack Onset: disabled");
     } else {
         post("  Attack Onset: %.6f", x->p_attack_onset);
+    }
+    if (x->p_onset_hysteresis_use_time) {
+        post("  Onset Hysteresis: %.3f ms", x->p_onset_hysteresis_ms);
+    } else {
+        post("  Onset Hysteresis (frames): %d", x->p_onset_hysteresis_frames);
+    }
+    if (x->p_attack_onset_ramp_use_time) {
+        post("  Attack Onset Ramp: %.3f ms", x->p_attack_onset_ramp_ms);
+    } else {
+        post("  Attack Onset Ramp (frames): %d", x->p_attack_onset_ramp_frames);
     }
     post("  Onset Floor: %.6f", x->p_onset_floor);
     post("  Reset Frames: %d", x->p_reset_frames);
@@ -458,6 +524,7 @@ static void torch_spectrails_tilde_hopsize(t_torch_spectrails_tilde *x, t_floata
         x->p_decay = x->processor->get_decay();
         post("torch.spectrails~: decay factor recalculated from decay6db after hopsize update (%.6f)", x->p_decay);
     }
+    torch_spectrails_tilde_update_frame_timing(x);
 }
 
 static void torch_spectrails_tilde_attackadapt(t_torch_spectrails_tilde *x, t_floatarg f) {
@@ -505,6 +572,74 @@ static void torch_spectrails_tilde_onsetfloor(t_torch_spectrails_tilde *x, t_flo
     }
 }
 
+static void torch_spectrails_tilde_onsethyst(t_torch_spectrails_tilde *x, t_floatarg f) {
+    if (f <= 0.0f) {
+        x->p_onset_hysteresis_ms = 0.0f;
+        x->p_onset_hysteresis_use_time = false;
+        x->p_onset_hysteresis_frames = 1;
+        if (x->processor) {
+            x->processor->set_onset_hysteresis_frames(x->p_onset_hysteresis_frames);
+            post("torch.spectrails~: onsethyst disabled (falling back to 1 frame)");
+        }
+        return;
+    }
+
+    x->p_onset_hysteresis_ms = f;
+    x->p_onset_hysteresis_use_time = true;
+    if (x->processor) {
+        x->processor->set_onset_hysteresis_time(x->p_onset_hysteresis_ms * 0.001f);
+        post("torch.spectrails~: onsethyst set to %.3f ms", x->p_onset_hysteresis_ms);
+    }
+}
+
+static void torch_spectrails_tilde_onsethystframes(t_torch_spectrails_tilde *x, t_floatarg f) {
+    int frames = static_cast<int>(f);
+    if (frames < 1) {
+        frames = 1;
+    }
+
+    x->p_onset_hysteresis_frames = frames;
+    x->p_onset_hysteresis_use_time = false;
+    if (x->processor) {
+        x->processor->set_onset_hysteresis_frames(x->p_onset_hysteresis_frames);
+        post("torch.spectrails~: onsethystframes set to %d", x->p_onset_hysteresis_frames);
+    }
+}
+
+static void torch_spectrails_tilde_attackonsetramp(t_torch_spectrails_tilde *x, t_floatarg f) {
+    if (f <= 0.0f) {
+        x->p_attack_onset_ramp_ms = 0.0f;
+        x->p_attack_onset_ramp_use_time = false;
+        x->p_attack_onset_ramp_frames = 0;
+        if (x->processor) {
+            x->processor->set_attack_onset_ramp_frames(0);
+            post("torch.spectrails~: attackonsetramp disabled");
+        }
+        return;
+    }
+
+    x->p_attack_onset_ramp_ms = f;
+    x->p_attack_onset_ramp_use_time = true;
+    if (x->processor) {
+        x->processor->set_attack_onset_ramp_time(x->p_attack_onset_ramp_ms * 0.001f);
+        post("torch.spectrails~: attackonsetramp set to %.3f ms", x->p_attack_onset_ramp_ms);
+    }
+}
+
+static void torch_spectrails_tilde_attackonsetrampframes(t_torch_spectrails_tilde *x, t_floatarg f) {
+    int frames = static_cast<int>(f);
+    if (frames < 0) {
+        frames = 0;
+    }
+
+    x->p_attack_onset_ramp_frames = frames;
+    x->p_attack_onset_ramp_use_time = false;
+    if (x->processor) {
+        x->processor->set_attack_onset_ramp_frames(x->p_attack_onset_ramp_frames);
+        post("torch.spectrails~: attackonsetrampframes set to %d", x->p_attack_onset_ramp_frames);
+    }
+}
+
 static void torch_spectrails_tilde_resetframes(t_torch_spectrails_tilde *x, t_floatarg f) {
     int frames = static_cast<int>(f);
     if (frames < 0) {
@@ -529,6 +664,45 @@ static void torch_spectrails_tilde_resetmult(t_torch_spectrails_tilde *x, t_floa
     if (x->processor) {
         x->processor->set_reset_multiplier(x->p_reset_multiplier);
         post("torch.spectrails~: resetmult set to %.6f", x->p_reset_multiplier);
+    }
+}
+
+static void torch_spectrails_tilde_frametiming(t_torch_spectrails_tilde *x, t_floatarg sr, t_floatarg hop) {
+    bool sr_changed = false;
+    bool hop_changed = false;
+
+    float requested_sr = static_cast<float>(sr);
+    if (requested_sr > 0.0f && std::abs(requested_sr - x->p_sample_rate) > 1e-3f) {
+        x->p_sample_rate = requested_sr;
+        sr_changed = true;
+    } else if (requested_sr <= 0.0f) {
+        float env_sr = sys_getsr();
+        if (env_sr > 0.0f && std::abs(env_sr - x->p_sample_rate) > 1e-3f) {
+            x->p_sample_rate = env_sr;
+            sr_changed = true;
+        }
+    }
+
+    float requested_hop = static_cast<float>(hop);
+    if (requested_hop > 0.0f) {
+        x->p_hop_size = requested_hop;
+        hop_changed = true;
+    }
+
+    if (x->p_hop_size <= 0.0f) {
+        x->p_hop_size = static_cast<float>(x->p_fft_size);
+        hop_changed = true;
+    }
+
+    if (x->p_use_decay6db && x->processor && (sr_changed || hop_changed)) {
+        x->processor->set_decay_time_s(x->p_decay6db, x->p_sample_rate, x->p_hop_size);
+        x->p_decay = x->processor->get_decay();
+    }
+
+    torch_spectrails_tilde_update_frame_timing(x);
+
+    if (x->processor && (sr_changed || hop_changed)) {
+        post("torch.spectrails~: frametiming updated (fs=%.2f Hz, hop=%.2f)", x->p_sample_rate, x->p_hop_size);
     }
 }
 
@@ -572,6 +746,8 @@ extern "C" void setup_torch0x2espectrails_tilde(void) {
                        gensym("reset"), A_NULL, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_hopsize, 
                    gensym("hopsize"), A_FLOAT, 0);
+        class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_hopsize, 
+               gensym("hop"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_attackadapt, 
                gensym("attackadapt"), A_FLOAT, 0);
         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_attackadapt, 
@@ -586,6 +762,22 @@ extern "C" void setup_torch0x2espectrails_tilde(void) {
              gensym("onsetfloor"), A_FLOAT, 0);
          class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_onsetfloor, 
              gensym("onset_floor"), A_FLOAT, 0);
+         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_onsethyst, 
+             gensym("onsethyst"), A_FLOAT, 0);
+         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_onsethyst, 
+             gensym("onset_hyst"), A_FLOAT, 0);
+         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_onsethystframes, 
+             gensym("onsethystframes"), A_FLOAT, 0);
+         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_onsethystframes, 
+             gensym("onset_hyst_frames"), A_FLOAT, 0);
+         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_attackonsetramp, 
+             gensym("attackonsetramp"), A_FLOAT, 0);
+         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_attackonsetramp, 
+             gensym("attack_onset_ramp"), A_FLOAT, 0);
+         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_attackonsetrampframes, 
+             gensym("attackonsetrampframes"), A_FLOAT, 0);
+         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_attackonsetrampframes, 
+             gensym("attack_onset_ramp_frames"), A_FLOAT, 0);
          class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_resetframes, 
              gensym("resetframes"), A_FLOAT, 0);
          class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_resetframes, 
@@ -596,9 +788,13 @@ extern "C" void setup_torch0x2espectrails_tilde(void) {
              gensym("resetmultiplier"), A_FLOAT, 0);
          class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_resetmult, 
              gensym("reset_multiplier"), A_FLOAT, 0);
+         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_frametiming, 
+             gensym("frametiming"), A_DEFFLOAT, A_DEFFLOAT, 0);
+         class_addmethod(torch_spectrails_tilde_class, (t_method)torch_spectrails_tilde_frametiming, 
+             gensym("frame_timing"), A_DEFFLOAT, A_DEFFLOAT, 0);
 
         post("torch.spectrails~: Spectral Trails Processor v1.0");
         post("  Use with torch.rfft~ and torch.irfft~ inside pfft~");
-         post("  Parameters: @threshold @attack @phaseattack @attackadapt @attackonset @onsetfloor @resetframes @resetmult @decay @decay6db @limiter @limitersoft @maxvalue @hopsize");
+        post("  Parameters: @threshold @attack @phaseattack @attackadapt @attackonset @attackonsetramp @onsetfloor @onsethyst @resetframes @resetmult @decay @decay6db @limiter @limitersoft @maxvalue @hopsize");
     
 }

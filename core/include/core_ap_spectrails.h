@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <limits>
+#include <cmath>
 
 namespace contorchionist {
     namespace core {
@@ -145,6 +146,33 @@ public:
     void set_limiter_softness(T softness);
 
     /**
+     * @brief Provide timing context so time-based parameters convert to frame counts.
+     * @param sample_rate Current sample rate (Hz).
+     * @param hop_size Hop size in samples per frame.
+     */
+    void set_frame_timing(T sample_rate, T hop_size);
+
+    /**
+     * @brief Configure onset hysteresis in frames (minimum consecutive frames above threshold).
+     */
+    void set_onset_hysteresis_frames(int frames);
+
+    /**
+     * @brief Configure onset hysteresis using a time in seconds (converted using frame timing).
+     */
+    void set_onset_hysteresis_time(T time_s);
+
+    /**
+     * @brief Configure the attack onset ramp duration in frames.
+     */
+    void set_attack_onset_ramp_frames(int frames);
+
+    /**
+     * @brief Configure the attack onset ramp duration using a time in seconds.
+     */
+    void set_attack_onset_ramp_time(T time_s);
+
+    /**
      * @brief Resize the processor for a different FFT size
      * @param num_bins New number of bins
      */
@@ -196,7 +224,27 @@ private:
     int reset_frames_;
     T reset_multiplier_;
     bool phase_attack_overridden_;
+
+    // Timing context
+    T sample_rate_;
+    T hop_size_;
+    T frames_per_second_;
+
+    // Onset hysteresis configuration
+    int onset_hysteresis_frames_;
+    T onset_hysteresis_time_s_;
+    bool onset_hysteresis_time_mode_;
+
+    // Onset ramp configuration
+    int attack_onset_ramp_frames_;
+    T attack_onset_ramp_time_s_;
+    bool attack_onset_ramp_time_mode_;
+
+    // Tracking tensors
     torch::Tensor below_threshold_counts_;
+    torch::Tensor above_threshold_counts_;
+    torch::Tensor onset_ramp_progress_;
+    torch::Tensor onset_ramp_active_;
 
     // Memory tensors
     torch::Tensor memory_magnitude_;
@@ -204,6 +252,8 @@ private:
 
     // Helper methods
     void log(const std::string& message) const;
+    void recompute_onset_hysteresis_frames();
+    void recompute_attack_onset_ramp_frames();
     void ensure_device(torch::Tensor& tensor);
 };
 
@@ -233,7 +283,19 @@ SpectralTrailsProcessor<T>::SpectralTrailsProcessor(
             reset_frames_(0),
             reset_multiplier_(static_cast<T>(0.5)),
             phase_attack_overridden_(false),
-            below_threshold_counts_()
+            sample_rate_(static_cast<T>(0.0)),
+            hop_size_(static_cast<T>(0.0)),
+            frames_per_second_(static_cast<T>(0.0)),
+            onset_hysteresis_frames_(1),
+            onset_hysteresis_time_s_(static_cast<T>(0.0)),
+            onset_hysteresis_time_mode_(false),
+            attack_onset_ramp_frames_(0),
+            attack_onset_ramp_time_s_(static_cast<T>(0.0)),
+            attack_onset_ramp_time_mode_(false),
+            below_threshold_counts_(),
+            above_threshold_counts_(),
+            onset_ramp_progress_(),
+            onset_ramp_active_()
 {
     if (num_bins_ == 0) {
         throw std::invalid_argument("SpectralTrailsProcessor: num_bins must be > 0");
@@ -244,6 +306,9 @@ SpectralTrailsProcessor<T>::SpectralTrailsProcessor(
     memory_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
     memory_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
     below_threshold_counts_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    above_threshold_counts_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    onset_ramp_progress_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    onset_ramp_active_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
 
     log("SpectralTrailsProcessor initialized with " + std::to_string(num_bins_) + " bins on device: " + device_.str());
 }
@@ -270,6 +335,15 @@ void SpectralTrailsProcessor<T>::set_device(torch::Device device) {
     }
     if (below_threshold_counts_.defined()) {
         below_threshold_counts_ = below_threshold_counts_.to(device_);
+    }
+    if (above_threshold_counts_.defined()) {
+        above_threshold_counts_ = above_threshold_counts_.to(device_);
+    }
+    if (onset_ramp_progress_.defined()) {
+        onset_ramp_progress_ = onset_ramp_progress_.to(device_);
+    }
+    if (onset_ramp_active_.defined()) {
+        onset_ramp_active_ = onset_ramp_active_.to(device_);
     }
 
     log("Device changed to: " + device_.str());
@@ -304,10 +378,17 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     // 1. Apply universal decay to memory
     memory_magnitude_ = memory_magnitude_ * decay_;
 
-    // Track bins that remain below threshold to optionally accelerate decay
-    if (!below_threshold_counts_.defined() || below_threshold_counts_.sizes() != memory_magnitude_.sizes()) {
-        below_threshold_counts_ = torch::zeros_like(memory_magnitude_);
-    }
+    auto ensure_tracking_tensor = [&](torch::Tensor& tensor) {
+        if (!tensor.defined() || tensor.sizes() != memory_magnitude_.sizes()) {
+            tensor = torch::zeros_like(memory_magnitude_);
+        }
+    };
+
+    // Track bins that remain below/above threshold to optionally accelerate decay or trigger hysteresis
+    ensure_tracking_tensor(below_threshold_counts_);
+    ensure_tracking_tensor(above_threshold_counts_);
+    ensure_tracking_tensor(onset_ramp_progress_);
+    ensure_tracking_tensor(onset_ramp_active_);
 
     torch::Tensor below_threshold_mask = mag_in <= threshold_;
 
@@ -326,13 +407,23 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
         below_threshold_counts_.zero_();
     }
 
-    // 2. Create mask for bins above threshold and above current memory
-    // This determines which bins will be reinforced
+    // 2. Track consecutive frames above threshold for onset hysteresis and ramp handling
     torch::Tensor above_threshold = mag_in > threshold_;
+    auto zeros_like_counts = torch::zeros_like(above_threshold_counts_);
+    auto incremented_above = above_threshold_counts_ + 1.0f;
+    above_threshold_counts_ = torch::where(above_threshold, incremented_above, zeros_like_counts);
+
+    auto zeros_like_active = torch::zeros_like(onset_ramp_active_);
+    onset_ramp_active_ = torch::where(above_threshold, onset_ramp_active_, zeros_like_active);
+
+    auto zeros_like_progress = torch::zeros_like(onset_ramp_progress_);
+    onset_ramp_progress_ = torch::where(above_threshold, onset_ramp_progress_, zeros_like_progress);
+
+    // 3. Create reinforcement mask (above threshold and increasing)
     torch::Tensor above_memory = mag_in > memory_magnitude_;
     torch::Tensor reinforce_mask = above_threshold & above_memory;
 
-    // 3. Apply per-bin adaptive attack (EMA) for reinforced bins
+    // 4. Prepare adaptive attack baseline
     torch::Tensor mag_attack_tensor = torch::full_like(mag_in, attack_);
     torch::Tensor adaptive_factor;
     bool use_adaptive_attack = attack_dynamic_rate_ > static_cast<T>(0.0);
@@ -344,11 +435,43 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
 
     mag_attack_tensor = torch::clamp(mag_attack_tensor, 0.0f, 1.0f);
 
-    // Promote faster response for genuine onsets (memory close to zero)
-    torch::Tensor onset_mask = (memory_magnitude_ <= onset_floor_) & (mag_in > threshold_);
+    // 5. Onset-specific attack ramp with hysteresis
+    T onset_attack_clamped = static_cast<T>(0.0);
+    torch::Tensor onset_weight = torch::zeros_like(mag_in);
     if (attack_onset_ >= static_cast<T>(0.0)) {
-        auto onset_attack_tensor = torch::full_like(mag_in, std::clamp(attack_onset_, static_cast<T>(0.0), static_cast<T>(1.0)));
-        mag_attack_tensor = torch::where(onset_mask, onset_attack_tensor, mag_attack_tensor);
+        onset_attack_clamped = std::clamp(attack_onset_, static_cast<T>(0.0), static_cast<T>(1.0));
+        int required_frames = std::max(1, onset_hysteresis_frames_);
+        torch::Tensor hysteresis_mask = above_threshold_counts_ >= static_cast<float>(required_frames);
+        torch::Tensor onset_candidate_mask = hysteresis_mask & above_threshold & (memory_magnitude_ <= onset_floor_);
+
+        auto zeros_mask_like = torch::zeros_like(onset_ramp_active_);
+        auto ones_mask_like = torch::ones_like(onset_ramp_active_);
+
+        onset_ramp_active_ = torch::where(onset_candidate_mask, ones_mask_like, onset_ramp_active_);
+        onset_ramp_progress_ = torch::where(onset_candidate_mask, torch::zeros_like(onset_ramp_progress_), onset_ramp_progress_);
+
+        if (attack_onset_ramp_frames_ > 0) {
+            auto active_mask = onset_ramp_active_ > 0.5f;
+            float ramp_frames = static_cast<float>(std::max(attack_onset_ramp_frames_, 1));
+            auto increment = torch::where(active_mask, onset_ramp_progress_ + 1.0f, onset_ramp_progress_);
+            onset_ramp_progress_ = torch::where(active_mask, torch::clamp(increment, 0.0f, ramp_frames), onset_ramp_progress_);
+            onset_weight = torch::where(active_mask, onset_ramp_progress_ / ramp_frames, torch::zeros_like(onset_ramp_progress_));
+
+            auto done_mask = onset_ramp_progress_ >= ramp_frames;
+            auto deactivate_mask = done_mask | torch::logical_not(above_threshold);
+            onset_ramp_active_ = torch::where(deactivate_mask, zeros_mask_like, onset_ramp_active_);
+            onset_ramp_progress_ = torch::where(onset_ramp_active_ > 0.5f, onset_ramp_progress_, torch::zeros_like(onset_ramp_progress_));
+
+            auto onset_attack_tensor = torch::full_like(mag_in, onset_attack_clamped);
+            mag_attack_tensor = mag_attack_tensor + onset_weight * (onset_attack_tensor - mag_attack_tensor);
+        } else {
+            auto onset_attack_tensor = torch::full_like(mag_in, onset_attack_clamped);
+            mag_attack_tensor = torch::where(onset_candidate_mask, onset_attack_tensor, mag_attack_tensor);
+            onset_weight = onset_candidate_mask.to(torch::kFloat32);
+        }
+    } else {
+        onset_ramp_active_.zero_();
+        onset_ramp_progress_.zero_();
     }
 
     torch::Tensor attack_update = mag_attack_tensor * mag_in + (1.0f - mag_attack_tensor) * memory_magnitude_;
@@ -384,8 +507,8 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     phase_attack_tensor = torch::clamp(phase_attack_tensor, 0.0f, 1.0f);
 
     if (attack_onset_ >= static_cast<T>(0.0)) {
-        auto onset_phase_tensor = torch::full_like(phase_diff, std::clamp(attack_onset_, static_cast<T>(0.0), static_cast<T>(1.0)));
-        phase_attack_tensor = torch::where(onset_mask, onset_phase_tensor, phase_attack_tensor);
+        auto onset_phase_tensor = torch::full_like(phase_diff, onset_attack_clamped);
+        phase_attack_tensor = phase_attack_tensor + onset_weight * (onset_phase_tensor - phase_attack_tensor);
     }
 
     auto phase_update = memory_phase_ + phase_attack_tensor * phase_diff;
@@ -514,6 +637,106 @@ void SpectralTrailsProcessor<T>::set_limiter_softness(T softness) {
 }
 
 template<typename T>
+void SpectralTrailsProcessor<T>::set_frame_timing(T sample_rate, T hop_size) {
+    if (sample_rate <= static_cast<T>(0.0) || hop_size <= static_cast<T>(0.0)) {
+        sample_rate_ = static_cast<T>(0.0);
+        hop_size_ = static_cast<T>(0.0);
+        frames_per_second_ = static_cast<T>(0.0);
+        log("Frame timing disabled (invalid sample rate or hop size)");
+        return;
+    }
+
+    sample_rate_ = sample_rate;
+    hop_size_ = hop_size;
+    frames_per_second_ = sample_rate_ / hop_size_;
+
+    if (onset_hysteresis_time_mode_) {
+        recompute_onset_hysteresis_frames();
+    }
+    if (attack_onset_ramp_time_mode_) {
+        recompute_attack_onset_ramp_frames();
+    }
+
+    log("Frame timing updated: sample_rate=" + std::to_string(sample_rate_) +
+        ", hop_size=" + std::to_string(hop_size_) +
+        ", frames_per_second=" + std::to_string(frames_per_second_));
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_onset_hysteresis_frames(int frames) {
+    onset_hysteresis_frames_ = std::max(1, frames);
+    onset_hysteresis_time_s_ = static_cast<T>(0.0);
+    onset_hysteresis_time_mode_ = false;
+    log("Onset hysteresis (frames) set to: " + std::to_string(onset_hysteresis_frames_));
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_onset_hysteresis_time(T time_s) {
+    time_s = std::max(static_cast<T>(0.0), time_s);
+    onset_hysteresis_time_s_ = time_s;
+    onset_hysteresis_time_mode_ = time_s > static_cast<T>(0.0);
+    if (onset_hysteresis_time_mode_) {
+        recompute_onset_hysteresis_frames();
+    } else {
+        onset_hysteresis_frames_ = 1;
+    }
+    log("Onset hysteresis (time) set to: " + std::to_string(onset_hysteresis_time_s_) + " s");
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_attack_onset_ramp_frames(int frames) {
+    attack_onset_ramp_frames_ = std::max(0, frames);
+    attack_onset_ramp_time_s_ = static_cast<T>(0.0);
+    attack_onset_ramp_time_mode_ = false;
+    log("Attack onset ramp (frames) set to: " + std::to_string(attack_onset_ramp_frames_));
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_attack_onset_ramp_time(T time_s) {
+    time_s = std::max(static_cast<T>(0.0), time_s);
+    attack_onset_ramp_time_s_ = time_s;
+    attack_onset_ramp_time_mode_ = time_s > static_cast<T>(0.0);
+    if (attack_onset_ramp_time_mode_) {
+        recompute_attack_onset_ramp_frames();
+    } else {
+        attack_onset_ramp_frames_ = 0;
+    }
+    log("Attack onset ramp (time) set to: " + std::to_string(attack_onset_ramp_time_s_) + " s");
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::recompute_onset_hysteresis_frames() {
+    if (!onset_hysteresis_time_mode_ || onset_hysteresis_time_s_ <= static_cast<T>(0.0)) {
+        onset_hysteresis_frames_ = std::max(1, onset_hysteresis_frames_);
+        return;
+    }
+
+    if (frames_per_second_ <= static_cast<T>(0.0)) {
+        // Defer computation until timing is available
+        return;
+    }
+
+    int frames = static_cast<int>(std::round(onset_hysteresis_time_s_ * frames_per_second_));
+    onset_hysteresis_frames_ = std::max(1, frames);
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::recompute_attack_onset_ramp_frames() {
+    if (!attack_onset_ramp_time_mode_ || attack_onset_ramp_time_s_ <= static_cast<T>(0.0)) {
+        attack_onset_ramp_frames_ = std::max(0, attack_onset_ramp_frames_);
+        return;
+    }
+
+    if (frames_per_second_ <= static_cast<T>(0.0)) {
+        // Defer computation until timing is available
+        return;
+    }
+
+    int frames = static_cast<int>(std::round(attack_onset_ramp_time_s_ * frames_per_second_));
+    attack_onset_ramp_frames_ = std::max(1, frames);
+}
+
+template<typename T>
 void SpectralTrailsProcessor<T>::resize(size_t num_bins) {
     if (num_bins == 0) {
         throw std::invalid_argument("SpectralTrailsProcessor: num_bins must be > 0");
@@ -525,6 +748,9 @@ void SpectralTrailsProcessor<T>::resize(size_t num_bins) {
     memory_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
     memory_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
     below_threshold_counts_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    above_threshold_counts_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    onset_ramp_progress_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    onset_ramp_active_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
 
     log("Resized to " + std::to_string(num_bins_) + " bins");
 }
@@ -535,6 +761,15 @@ void SpectralTrailsProcessor<T>::reset_memory() {
     memory_phase_.zero_();
     if (below_threshold_counts_.defined()) {
         below_threshold_counts_.zero_();
+    }
+    if (above_threshold_counts_.defined()) {
+        above_threshold_counts_.zero_();
+    }
+    if (onset_ramp_progress_.defined()) {
+        onset_ramp_progress_.zero_();
+    }
+    if (onset_ramp_active_.defined()) {
+        onset_ramp_active_.zero_();
     }
     log("Memory reset to zero");
 }
