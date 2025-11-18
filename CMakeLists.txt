@@ -7,9 +7,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # --- Build Options for Wrappers (can be defined here or in src/wrappers/CMakeLists.txt) ---
 option(BUILD_PD_WRAPPER "Build the Pure Data wrapper" ON)
-option(BUILD_MAX_WRAPPER "Build the Max/MSP wrapper" ON)
-option(BUILD_SC_WRAPPER "Build the SuperCollider wrapper" ON)
-option(BUILD_PYTHON_WRAPPER "Build the Python wrapper" ON)
+option(BUILD_MAX_WRAPPER "Build the Max/MSP wrapper" OFF)
+option(BUILD_SC_WRAPPER "Build the SuperCollider wrapper" OFF)
+option(BUILD_PYTHON_WRAPPER "Build the Python wrapper" OFF)
 
 # --- Testing (Optional, but recommended) ---
 option(BUILD_TESTS "Build tests for the project" OFF)
@@ -412,6 +412,123 @@ if(EXISTS ${RESOURCES_DIR})
         )
     endforeach()
     message(STATUS "Configured copying of 'resources' directory to all wrapper distribution directories.")
+endif()
+
+# ------------------------------------------------------------
+# Install rules: copia a pasta de distribuição (PD_OUTPUT_DIR)
+# para os diretórios de Pd e PlugData do usuário, se existirem.
+# Uso: cmake --install build
+# ------------------------------------------------------------
+
+# Diretórios padrão do usuário (expande $HOME via ENV{HOME})
+set(PD_USER_PDDIR "$ENV{HOME}/Documents/Pd/externals")
+set(PLUGDATA_USER_DIR "$ENV{HOME}/Documents/plugdata/Externals")
+
+# Definir o diretório de distribuição do PureData
+set(PD_OUTPUT_DIR "${PROJECT_DIST_DIR}/puredata")
+
+# ------------------------------------------------------------
+# Custom install target that performs the copy without
+# invoking the top-level cmake install (avoids subproject install errors)
+# Usage: cmake --build build --target install-puredata
+# ------------------------------------------------------------
+
+# Create a small CMake script under the build dir that will perform the copy
+file(WRITE "${CMAKE_BINARY_DIR}/install_puredata.cmake"
+"message(STATUS \"Running install-puredata script...\")\n"
+"if(EXISTS \"${PD_USER_PDDIR}\")\n"
+"  message(STATUS \"Found target Pd externals dir: ${PD_USER_PDDIR} - copying distribution...\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/\" DESTINATION \"${PD_USER_PDDIR}/conTorchinistSN\")\n"
+"  message(STATUS \"Copied ${PD_OUTPUT_DIR} to ${PD_USER_PDDIR}/conTorchinistSN\")\n"
+"else()\n"
+"  message(STATUS \"Pd externals dir ${PD_USER_PDDIR} not found; skipping copy\")\n"
+"endif()\n"
+"if(EXISTS \"${PLUGDATA_USER_DIR}\")\n"
+"  message(STATUS \"Found target PlugData externals dir: ${PLUGDATA_USER_DIR} - copying distribution...\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/\" DESTINATION \"${PLUGDATA_USER_DIR}/conTorchinistSN\")\n"
+"  message(STATUS \"Copied ${PD_OUTPUT_DIR} to ${PLUGDATA_USER_DIR}/conTorchinistSN\")\n"
+"else()\n"
+"  message(STATUS \"PlugData externals dir ${PLUGDATA_USER_DIR} not found; skipping copy\")\n"
+"endif()\n")
+
+add_custom_target(install-puredata
+    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/install_puredata.cmake
+    COMMENT "Install Pure Data externals to user directories (if present)"
+    VERBATIM
+)
+
+# --- Instalação via cmake --install ---
+
+# Instala em Pure Data se o diretório existir
+if(EXISTS ${PD_USER_PDDIR})
+    message(STATUS "Instalação habilitada para: ${PD_USER_PDDIR}")
+    install(DIRECTORY ${PD_OUTPUT_DIR}/
+            DESTINATION ${PD_USER_PDDIR}/conTorchinistSN
+            USE_SOURCE_PERMISSIONS
+            COMPONENT pd_externals
+            FILES_MATCHING
+            PATTERN "*.pd_darwin"
+            PATTERN "*.pd_linux"
+            PATTERN "*.dll"
+            PATTERN "*.dylib"
+            PATTERN "*.so"
+            PATTERN "*.so.*"
+            PATTERN "*.pd"
+            PATTERN "*.txt"
+            PATTERN "resources/*")
+    # Também adiciona ao componente 'all'
+    install(DIRECTORY ${PD_OUTPUT_DIR}/
+            DESTINATION ${PD_USER_PDDIR}/conTorchinistSN
+            USE_SOURCE_PERMISSIONS
+            COMPONENT all
+            FILES_MATCHING
+            PATTERN "*.pd_darwin"
+            PATTERN "*.pd_linux"
+            PATTERN "*.dll"
+            PATTERN "*.dylib"
+            PATTERN "*.so"
+            PATTERN "*.so.*"
+            PATTERN "*.pd"
+            PATTERN "*.txt"
+            PATTERN "resources/*")
+else()
+    message(STATUS "Diretório não encontrado, instalação desabilitada: ${PD_USER_PDDIR}")
+endif()
+
+# Instala em PlugData se o diretório existir
+if(EXISTS ${PLUGDATA_USER_DIR})
+    message(STATUS "Instalação habilitada para: ${PLUGDATA_USER_DIR}")
+    install(DIRECTORY ${PD_OUTPUT_DIR}/
+            DESTINATION ${PLUGDATA_USER_DIR}/conTorchinistSN
+            USE_SOURCE_PERMISSIONS
+            COMPONENT plugdata_externals
+            FILES_MATCHING
+            PATTERN "*.pd_darwin"
+            PATTERN "*.pd_linux"
+            PATTERN "*.dll"
+            PATTERN "*.dylib"
+            PATTERN "*.so"
+            PATTERN "*.so.*"
+            PATTERN "*.pd"
+            PATTERN "*.txt"
+            PATTERN "resources/*")
+    # Também adiciona ao componente 'all'
+    install(DIRECTORY ${PD_OUTPUT_DIR}/
+            DESTINATION ${PLUGDATA_USER_DIR}/conTorchinistSN
+            USE_SOURCE_PERMISSIONS
+            COMPONENT all
+            FILES_MATCHING
+            PATTERN "*.pd_darwin"
+            PATTERN "*.pd_linux"
+            PATTERN "*.dll"
+            PATTERN "*.dylib"
+            PATTERN "*.so"
+            PATTERN "*.so.*"
+            PATTERN "*.pd"
+            PATTERN "*.txt"
+            PATTERN "resources/*")
+else()
+    message(STATUS "Diretório não encontrado, instalação desabilitada: ${PLUGDATA_USER_DIR}")
 endif()
 
 message(STATUS "Contorchionist project configuration complete. Build type: ${CMAKE_BUILD_TYPE}")

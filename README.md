@@ -11,6 +11,50 @@ DISCLAIMER: The project is currently in its early stages of development. For now
 
 At this moment, we do not provide pre-compiled binaries. To use the library, you need to compile it for your specific environment and language by modifying the options in the main `CMakeLists.txt` file.
 
+### Building the Project
+
+The project uses CMake as its build system. To configure and build:
+
+```bash
+# Configure the project
+cmake -S . -B build
+
+# Build all targets
+cmake --build build
+```
+
+### Build Options
+
+You can enable/disable specific wrappers by setting the following options in `CMakeLists.txt`:
+
+- `BUILD_PD_WRAPPER` - Build the Pure Data wrapper (default: ON)
+- `BUILD_MAX_WRAPPER` - Build the Max/MSP wrapper (default: ON)
+- `BUILD_SC_WRAPPER` - Build the SuperCollider wrapper (default: ON)
+- `BUILD_PYTHON_WRAPPER` - Build the Python wrapper (default: ON)
+- `BUILD_TESTS` - Build tests for the project (default: OFF)
+
+## Installation
+
+### Pure Data and PlugData
+
+After building the project, you can install the externals to Pure Data and PlugData using the custom install target:
+
+```bash
+cmake --build build --target install-puredata
+```
+
+This will automatically copy the distribution folder to:
+- **Pure Data**: `~/Documents/Pd/externals/conTorchinistSN/`
+- **PlugData**: `~/Documents/plugdata/Externals/conTorchinistSN/`
+
+The installation will only proceed if the target directories exist. All necessary files (externals, dynamic libraries, help patches, and resources) will be copied.
+
+Alternatively, you can use the standard CMake install command:
+
+```bash
+cmake --install build
+```
+
 ## Acknowledgments
 
 This project is developed at [ECrIS - Espaço de Criação de Investigação Sonora](https://ecris.cc/), a laboratory of the [School of Music of the Federal University of Minas Gerais (UFMG)](https://www.musica.ufmg.br/), with support from CNPq and FAPEMIG.
