@@ -17,7 +17,7 @@ public:
           m_attack_alpha(static_cast<T>(0.8)),
           m_decay_factor(static_cast<T>(0.999)),
           m_decay_time_s(static_cast<T>(4.0)),
-          m_sample_rate(static_cast<T>(44100.0)),
+          m_sample_rate(static_cast<T>(48000.0)),
           m_hop_size(static_cast<T>(512.0)) {
         if (fft_size > 0) {
             size_t num_bins = fft_size / 2 + 1;
@@ -53,11 +53,11 @@ public:
             }
         }
 
-        // 3. Force DC and Nyquist phase to zero
-        if (m_memory_phase.size() > 0) {
-            m_memory_phase[0] = static_cast<T>(0.0); // DC component
-            m_memory_phase.back() = static_cast<T>(0.0); // Nyquist component
-        }
+        // // 3. Force DC and Nyquist phase to zero
+    // if (m_memory_phase.size() > 0) {
+        m_memory_phase[0] = static_cast<T>(0.0); // DC component
+        m_memory_phase.back() = static_cast<T>(0.0); // Nyquist component
+        // }
     }
 
     /**
@@ -107,6 +107,24 @@ public:
         if (sample_rate > 0) m_sample_rate = sample_rate;
         if (hop_size > 0) m_hop_size = hop_size;
         calculate_decay_factor();
+    }
+
+    /**
+     * @brief Sets the decay factor directly (bypassing time-based calculation).
+     * @param factor A value between 0.0 and 1.0. Values closer to 1.0 mean slower decay.
+     */
+    void set_decay_factor(T factor) {
+        if (factor >= static_cast<T>(0.0) && factor <= static_cast<T>(1.0)) {
+            m_decay_factor = factor;
+        }
+    }
+
+    /**
+     * @brief Gets the current decay factor.
+     * @return The current decay factor value.
+     */
+    T get_decay_factor() const {
+        return m_decay_factor;
     }
 
     /**

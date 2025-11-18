@@ -20,6 +20,7 @@ typedef struct _specleakrfft_tilde {
     double p_threshold;
     double p_attack_alpha;
     double p_decay_time_s;
+    double p_decay_factor;
     double p_sample_rate; // Sample rate of the main patch
     double p_hop_size;
     size_t p_fft_size; // Configured FFT size
@@ -39,6 +40,7 @@ static t_int *specleakrfft_tilde_perform(t_int *w);
 static void specleakrfft_tilde_threshold(t_specleakrfft_tilde *x, t_floatarg f);
 static void specleakrfft_tilde_attack(t_specleakrfft_tilde *x, t_floatarg f);
 static void specleakrfft_tilde_decay(t_specleakrfft_tilde *x, t_symbol *s, int argc, t_atom *argv);
+static void specleakrfft_tilde_decayfactor(t_specleakrfft_tilde *x, t_floatarg f);
 
 
 // --- DSP Routine ---
@@ -149,12 +151,29 @@ static void *specleakrfft_tilde_new(t_symbol *s, int argc, t_atom *argv) {
         x->processor->set_decay_time_s(x->p_decay_time_s, x->p_sample_rate, x->p_hop_size);
     }
 
+    x->p_decay_factor = parser.get_float("decayfactor", -1.0f);
+    if (x->p_decay_factor >= 0.0 && x->p_decay_factor <= 1.0 && x->processor) {
+        x->processor->set_decay_factor(x->p_decay_factor);
+    } else if (x->processor) {
+        x->p_decay_factor = x->processor->get_decay_factor();
+    }
+
     // Create inlets and outlets
     inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_signal, &s_signal);
     outlet_new(&x->x_obj, &s_signal);
     x->p_phase_outlet = outlet_new(&x->x_obj, &s_signal);
 
-    post("specleakrfft~: Spectral Leak RFFT tilde object created.");
+    // Log all parameters
+    post("specleakrfft~: ===== Object Created =====");
+    post("  FFT Size: %zu", x->p_fft_size);
+    post("  Hop Size: %.2f", x->p_hop_size);
+    post("  Sample Rate: %.2f", x->p_sample_rate);
+    post("  Threshold: %.4f", x->p_threshold);
+    post("  Attack Alpha: %.4f", x->p_attack_alpha);
+    post("  Decay Time: %.4f s", x->p_decay_time_s);
+    post("  Decay Factor: %.6f", x->p_decay_factor);
+    post("===============================");
+    
     return (void *)x;
 }
 
@@ -181,6 +200,16 @@ static void specleakrfft_tilde_decay(t_specleakrfft_tilde *x, t_symbol *s, int a
 
     if (x->processor) {
         x->processor->set_decay_time_s(x->p_decay_time_s, x->p_sample_rate, x->p_hop_size);
+        x->p_decay_factor = x->processor->get_decay_factor();
+        post("specleakrfft~: decay updated - time=%.4fs, factor=%.6f", x->p_decay_time_s, x->p_decay_factor);
+    }
+}
+
+static void specleakrfft_tilde_decayfactor(t_specleakrfft_tilde *x, t_floatarg f) {
+    x->p_decay_factor = f;
+    if (x->processor) {
+        x->processor->set_decay_factor(x->p_decay_factor);
+        post("specleakrfft~: decay factor set to %.6f", x->p_decay_factor);
     }
 }
 
@@ -201,6 +230,7 @@ extern "C" {
         class_addmethod(specleakrfft_tilde_class, (t_method)specleakrfft_tilde_threshold, gensym("threshold"), A_FLOAT, 0);
         class_addmethod(specleakrfft_tilde_class, (t_method)specleakrfft_tilde_attack, gensym("attack"), A_FLOAT, 0);
         class_addmethod(specleakrfft_tilde_class, (t_method)specleakrfft_tilde_decay, gensym("decay"), A_GIMME, 0);
+        class_addmethod(specleakrfft_tilde_class, (t_method)specleakrfft_tilde_decayfactor, gensym("decayfactor"), A_FLOAT, 0);
 
         post("specleakrfft~: C++ Spectral Leak RFFT v1.1 (Signal-rate)");
     }
