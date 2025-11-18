@@ -10,8 +10,11 @@
 typedef struct _specleakrfft_tilde {
     t_object x_obj;
     t_float x_f; // Dummy float for signal inlet
+    t_float x_f_phase; // Dummy float for phase inlet
 
     std::unique_ptr<SpectralLeakRFFTProcessor<double>> processor;
+
+    t_outlet* p_phase_outlet;
 
     // Parameters stored in the Pd object
     double p_threshold;
@@ -41,43 +44,53 @@ static void specleakrfft_tilde_decay(t_specleakrfft_tilde *x, t_symbol *s, int a
 // --- DSP Routine ---
 static t_int *specleakrfft_tilde_perform(t_int *w) {
     t_specleakrfft_tilde *x = (t_specleakrfft_tilde *)(w[1]);
-    t_sample *in = (t_sample *)(w[2]);
-    t_sample *out = (t_sample *)(w[3]);
-    int n = (int)(w[4]); // Block size (which is the FFT size inside pfft~)
+    t_sample *in_mag = (t_sample *)(w[2]);
+    t_sample *in_phase = (t_sample *)(w[3]);
+    t_sample *out_mag = (t_sample *)(w[4]);
+    t_sample *out_phase = (t_sample *)(w[5]);
+    int n = (int)(w[6]); // Block size
 
-
-    
     if (x->processor) {
         size_t num_bins = n / 2 + 1;
 
         // 1. Convert incoming POWER to MAGNITUDE
         std::vector<double> magnitude_frame(num_bins);
         for (size_t i = 0; i < num_bins; ++i) {
-            // Ensure input is non-negative before sqrt by comparing with a float literal 0.0f
-            magnitude_frame[i] = std::sqrt(std::max(0.0f, in[i]));
+            magnitude_frame[i] = std::sqrt(std::max(0.0f, in_mag[i]));
         }
 
-        // 2. Process the magnitude frame
-        x->processor->process_frame(magnitude_frame);
+        // Create vector for phase frame
+        std::vector<double> phase_frame(in_phase, in_phase + num_bins);
+
+        // 2. Process the magnitude and phase frames
+        x->processor->process_frame(magnitude_frame, phase_frame);
 
         // 3. Convert processed MAGNITUDE back to POWER
         const auto& processed_magnitude_frame = x->processor->get_processed_frame();
         for (size_t i = 0; i < num_bins; ++i) {
-            out[i] = processed_magnitude_frame[i] * processed_magnitude_frame[i];
+            out_mag[i] = processed_magnitude_frame[i] * processed_magnitude_frame[i];
         }
 
-        // Zero out the rest of the output buffer as is conventional in pfft~
+        // 4. Output the processed phase
+        const auto& processed_phase_frame = x->processor->get_processed_phase_frame();
+        for (size_t i = 0; i < num_bins; ++i) {
+            out_phase[i] = processed_phase_frame[i];
+        }
+
+        // Zero out the rest of the output buffers
         for (size_t i = num_bins; i < n; ++i) {
-            out[i] = 0.0;
+            out_mag[i] = 0.0;
+            out_phase[i] = 0.0;
         }
     } else {
-        // If processor isn't ready, just zero the output
+        // If processor isn't ready, just zero the outputs
         for (int i = 0; i < n; ++i) {
-            out[i] = 0.0;
+            out_mag[i] = 0.0;
+            out_phase[i] = 0.0;
         }
     }
 
-    return (w + 5);
+    return (w + 7);
 }
 
 
@@ -96,7 +109,7 @@ static void specleakrfft_tilde_dsp(t_specleakrfft_tilde *x, t_signal **sp) {
         }
     }
 
-    dsp_add(specleakrfft_tilde_perform, 4, x, sp[0]->s_vec, sp[1]->s_vec, sp[0]->s_n);
+    dsp_add(specleakrfft_tilde_perform, 6, x, sp[0]->s_vec, sp[1]->s_vec, sp[2]->s_vec, sp[3]->s_vec, sp[0]->s_n);
 }
 
 // --- Object Lifecycle ---
@@ -136,8 +149,10 @@ static void *specleakrfft_tilde_new(t_symbol *s, int argc, t_atom *argv) {
         x->processor->set_decay_time_s(x->p_decay_time_s, x->p_sample_rate, x->p_hop_size);
     }
 
-    // Create a signal outlet
+    // Create inlets and outlets
+    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_signal, &s_signal);
     outlet_new(&x->x_obj, &s_signal);
+    x->p_phase_outlet = outlet_new(&x->x_obj, &s_signal);
 
     post("specleakrfft~: Spectral Leak RFFT tilde object created.");
     return (void *)x;

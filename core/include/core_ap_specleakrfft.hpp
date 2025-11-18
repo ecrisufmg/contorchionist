@@ -20,19 +20,20 @@ public:
           m_sample_rate(static_cast<T>(44100.0)),
           m_hop_size(static_cast<T>(512.0)) {
         if (fft_size > 0) {
-            m_memory_spectrum.resize(fft_size / 2 + 1, static_cast<T>(0.0));
+            size_t num_bins = fft_size / 2 + 1;
+            m_memory_spectrum.resize(num_bins, static_cast<T>(0.0));
+            m_memory_phase.resize(num_bins, static_cast<T>(0.0));
         }
         calculate_decay_factor();
     }
 
     /**
-     * @brief Processes a single frame of spectral magnitude data.
-     * First applies decay to the memory spectrum, then reinforces it with the input frame.
-     * @param input_frame A vector of spectral magnitudes (size N/2 + 1).
+     * @brief Processes a single frame of spectral magnitude and phase data.
+     * @param magnitude_frame A vector of spectral magnitudes.
+     * @param phase_frame A vector of spectral phases.
      */
-    void process_frame(const std::vector<T>& input_frame) {
-        if (input_frame.size() != m_memory_spectrum.size()) {
-            // Optional: Handle error or resize. For now, we assume matching sizes.
+    void process_frame(const std::vector<T>& magnitude_frame, const std::vector<T>& phase_frame) {
+        if (magnitude_frame.size() != m_memory_spectrum.size() || phase_frame.size() != m_memory_phase.size()) {
             return;
         }
 
@@ -41,22 +42,32 @@ public:
             bin *= m_decay_factor;
         }
 
-        // 2. Selective Reinforcement
-        for (size_t i = 0; i < input_frame.size(); ++i) {
-            if (input_frame[i] > m_threshold) {
-                // Apply Exponential Moving Average (EMA) for the attack
-                m_memory_spectrum[i] = (m_attack_alpha * input_frame[i]) +
+        // 2. Selective Reinforcement with phase locking
+        for (size_t i = 0; i < magnitude_frame.size(); ++i) {
+            if (magnitude_frame[i] > m_memory_spectrum[i] && magnitude_frame[i] > m_threshold) {
+                // Apply EMA for the attack on magnitude
+                m_memory_spectrum[i] = (m_attack_alpha * magnitude_frame[i]) +
                                        ((static_cast<T>(1.0) - m_attack_alpha) * m_memory_spectrum[i]);
+                // Lock the phase
+                m_memory_phase[i] = phase_frame[i];
             }
         }
     }
 
     /**
-     * @brief Retrieves the current state of the memory spectrum.
-     * @return A constant reference to the internal memory spectrum vector.
+     * @brief Retrieves the current state of the magnitude memory spectrum.
+     * @return A constant reference to the internal magnitude spectrum vector.
      */
     const std::vector<T>& get_processed_frame() const {
         return m_memory_spectrum;
+    }
+
+    /**
+     * @brief Retrieves the current state of the phase memory spectrum.
+     * @return A constant reference to the internal phase spectrum vector.
+     */
+    const std::vector<T>& get_processed_phase_frame() const {
+        return m_memory_phase;
     }
 
     // --- Configuration Setters ---
@@ -99,13 +110,16 @@ public:
      */
     void resize(size_t new_fft_size) {
         if (new_fft_size > 0) {
-            m_memory_spectrum.assign(new_fft_size / 2 + 1, static_cast<T>(0.0));
+            size_t num_bins = new_fft_size / 2 + 1;
+            m_memory_spectrum.assign(num_bins, static_cast<T>(0.0));
+            m_memory_phase.assign(num_bins, static_cast<T>(0.0));
         }
     }
 
 protected:
     // --- Member Variables ---
     std::vector<T> m_memory_spectrum;
+    std::vector<T> m_memory_phase;
 private:
     T m_threshold;
     T m_attack_alpha;

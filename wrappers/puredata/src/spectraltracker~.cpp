@@ -36,7 +36,9 @@ static t_int* spectraltracker_tilde_perform(t_int* w) {
             input_frame[i] = in[i];
         }
 
-        x->processor->process_frame(input_frame);
+        // Create a dummy phase vector to satisfy the updated process_frame signature
+        std::vector<double> dummy_phase_frame(num_bins, 0.0);
+        x->processor->process_frame(input_frame, dummy_phase_frame);
         x->processor->find_and_assign_peaks(x->p_sample_rate);
 
         const auto& voices = x->processor->get_voices();
