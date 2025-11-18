@@ -9,15 +9,17 @@ Este documento organiza a evolução planejada do `SpectralTrailsProcessor` e do
   - Introduzir `decay6db`; ao recebê-lo, calcular `decay_factor = pow(0.5, 1.0 / (time_s * frames_per_second))`, onde `frames_per_second = sample_rate / hop_size`.
   - Atualizar o wrapper PD (`@decay6db`, mensagem `decay6db <f>`) e validar a coexistência com o modo antigo.
 
-## Prioridade 2 — Ataque independente por bin (ainda ruim)
+## Prioridade 2 — Ataque independente por bin (andamento)
 - **Objetivo**: reduzir saltos na ativação de novos bins sem depender de `maxvalue` extremamente baixo.
-- **Abordagem**:
-  - Manter tempos de ataque separados para magnitude e fase.
-  - Ajustar o ataque com base na diferença entre entrada e memória (p.ex., interpolação exponencial dependente da magnitude do erro).
-  - Investigar curvas com assimetria controlada: manter ataques padrão em 0.001/0.999 e usar um ganho adaptativo (`attackadapt`) que só aproxima o coeficiente de 1.0 quando o delta é alto.
-  - Testar alternativas de interpolação (p.ex. função sigmoide ou soft knee) para suavizar transições, garantindo que bins silenciosos não reintroduzam ruído em novos ataques.
-  - Mapear uma tabela de coeficientes por faixa de frequência para tratar graves e agudos com suavizações diferentes (se necessário).
-  - Expor novos parâmetros conforme necessário e medir a redução de artefatos auditivos.
+- **Progresso**:
+  - `attackadapt` já controla a aproximação do ataque em função do delta.
+  - Novo parâmetro `@attackonset` (desativável com valores negativos) aplica ataque dedicado quando a memória está abaixo do piso definido e o bin cruza o threshold.
+  - `@onsetfloor` define o piso que caracteriza “novo bin” (base para o gatilho de `@attackonset`).
+  - `@resetframes` conta quantos frames consecutivos um bin passou abaixo do `threshold`; ao atingir o valor configurado, o reset parcial é disparado.
+  - `@resetmult` define o multiplicador aplicado quando o reset parcial acontece (0 limpa completamente, 1 não altera o bin, valores intermediários aceleram o decaimento).
+- **Próximos passos**:
+  - Refinar curvas adaptativas para graves/agudos se ainda houver ruído perceptível.
+  - Medir audições A/B com e sem `attackonset` para ajustar valores padrão.
 
 ## Prioridade 3 — Limiter suave OK
 - **Objetivo**: controlar picos sem “achatamento” abrupto da memória.
@@ -27,12 +29,14 @@ Este documento organiza a evolução planejada do `SpectralTrailsProcessor` e do
   - Implementado: parâmetro `@limitersoft` (alias `@limitersmooth`) aplica joelho racional `over / (1 + k·over)` mantendo continuidade; testar valores típicos `0.1`–`2.0` e registrar comportamento extremo.
   - Garantir que a energia média permaneça próxima dos valores originais.
 
-## Prioridade 4 — Reset parcial inteligente
+## Prioridade 4 — Reset parcial inteligente (protótipo)
 - **Objetivo**: liberar memória mais rápido quando bins permanecem abaixo do threshold, evitando reativações altas.
-- **Abordagem**:
-  - Monitorar quantos frames consecutivos cada bin fica abaixo do threshold.
-  - Após um número configurável de frames, aplicar decaimento acelerado ou reset parcial daquele bin.
-  - Testar com sinais impulsivos e sons com sustain longo.
+- **Progresso**:
+  - `@resetframes` controla o número de frames consecutivos abaixo do threshold antes de aplicar reset.
+  - `@resetmult` define o multiplicador aplicado ao bin quando o reset dispara (0.0 zera completamente, valores próximos de 1.0 apenas aceleram o decaimento).
+- **Próximos passos**:
+  - Testar em materiais com longos silêncios/ruído de fundo para validar o comportamento.
+  - Avaliar se o reset também deve zerar fase ou usar uma interpolação mais suave.
 
 ## Prioridade 5 — Smoothing dependente do hop (hop-aware)
 - **Objetivo**: alinhar o smoothing de magnitude/fase com a sobreposição usada em `torch.rfft~` / `torch.irfft~`.
