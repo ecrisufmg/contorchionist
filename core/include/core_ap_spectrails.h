@@ -114,6 +114,30 @@ public:
     void set_attack_dynamic_rate(T rate);
 
     /**
+     * @brief Set the attack coefficient used for onset bins (memory below onset floor).
+     * @param attack_onset Attack value applied to new/onset bins.
+     */
+    void set_attack_onset(T attack_onset);
+
+    /**
+     * @brief Set the magnitude floor under which a bin is considered a new onset.
+     * @param floor Non-negative magnitude floor.
+     */
+    void set_onset_floor(T floor);
+
+    /**
+     * @brief Configure the number of consecutive frames below threshold before accelerated decay kicks in.
+     * @param frames Non-negative frame count (0 disables the feature).
+     */
+    void set_reset_frames(int frames);
+
+    /**
+     * @brief Configure the multiplier applied when reset_frames is exceeded (0-1, lower values reset faster).
+     * @param multiplier Clamp between 0 and 1.
+     */
+    void set_reset_multiplier(T multiplier);
+
+    /**
      * @brief Control the softness of the limiter knee.
      *        0 keeps the legacy hard clamp; higher values progressively smooth the limiting curve.
      * @param softness Non-negative softness value.
@@ -138,8 +162,12 @@ public:
     T get_phase_attack() const { return attack_phase_; }
     T get_decay() const { return decay_; }
     T get_attack_dynamic_rate() const { return attack_dynamic_rate_; }
+    T get_attack_onset() const { return attack_onset_; }
+    T get_onset_floor() const { return onset_floor_; }
     bool is_limiter_enabled() const { return limiter_enabled_; }
     T get_max_value() const { return max_value_; }
+    int get_reset_frames() const { return reset_frames_; }
+    T get_reset_multiplier() const { return reset_multiplier_; }
     T get_limiter_softness() const { return limiter_softness_; }
     torch::Device get_device() const { return device_; }
     size_t get_num_bins() const { return num_bins_; }
@@ -160,10 +188,15 @@ private:
     T attack_phase_;
     T decay_;
     T attack_dynamic_rate_;
+    T attack_onset_;
+    T onset_floor_;
     bool limiter_enabled_;
     T max_value_;
     T limiter_softness_;
+    int reset_frames_;
+    T reset_multiplier_;
     bool phase_attack_overridden_;
+    torch::Tensor below_threshold_counts_;
 
     // Memory tensors
     torch::Tensor memory_magnitude_;
@@ -192,10 +225,15 @@ SpectralTrailsProcessor<T>::SpectralTrailsProcessor(
             attack_phase_(static_cast<T>(0.8)),
             decay_(static_cast<T>(0.999)),
             attack_dynamic_rate_(static_cast<T>(0.0)),
+            attack_onset_(static_cast<T>(0.95)),
+            onset_floor_(static_cast<T>(1e-3)),
             limiter_enabled_(false),
             max_value_(static_cast<T>(1.0)),
             limiter_softness_(static_cast<T>(0.0)),
-            phase_attack_overridden_(false)
+            reset_frames_(0),
+            reset_multiplier_(static_cast<T>(0.5)),
+            phase_attack_overridden_(false),
+            below_threshold_counts_()
 {
     if (num_bins_ == 0) {
         throw std::invalid_argument("SpectralTrailsProcessor: num_bins must be > 0");
@@ -205,6 +243,7 @@ SpectralTrailsProcessor<T>::SpectralTrailsProcessor(
     auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
     memory_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
     memory_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    below_threshold_counts_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
 
     log("SpectralTrailsProcessor initialized with " + std::to_string(num_bins_) + " bins on device: " + device_.str());
 }
@@ -228,6 +267,9 @@ void SpectralTrailsProcessor<T>::set_device(torch::Device device) {
     }
     if (memory_phase_.defined()) {
         memory_phase_ = memory_phase_.to(device_);
+    }
+    if (below_threshold_counts_.defined()) {
+        below_threshold_counts_ = below_threshold_counts_.to(device_);
     }
 
     log("Device changed to: " + device_.str());
@@ -262,6 +304,28 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     // 1. Apply universal decay to memory
     memory_magnitude_ = memory_magnitude_ * decay_;
 
+    // Track bins that remain below threshold to optionally accelerate decay
+    if (!below_threshold_counts_.defined() || below_threshold_counts_.sizes() != memory_magnitude_.sizes()) {
+        below_threshold_counts_ = torch::zeros_like(memory_magnitude_);
+    }
+
+    torch::Tensor below_threshold_mask = mag_in <= threshold_;
+
+    if (reset_frames_ > 0) {
+        auto zeros = torch::zeros_like(below_threshold_counts_);
+        auto incremented = below_threshold_counts_ + 1.0f;
+        below_threshold_counts_ = torch::where(below_threshold_mask, incremented, zeros);
+
+        if (reset_multiplier_ >= static_cast<T>(0.0) && reset_multiplier_ < static_cast<T>(1.0)) {
+            auto reset_mask = below_threshold_counts_ >= static_cast<float>(reset_frames_);
+            auto reset_scale = torch::full_like(memory_magnitude_, reset_multiplier_);
+            memory_magnitude_ = torch::where(reset_mask, memory_magnitude_ * reset_scale, memory_magnitude_);
+            memory_phase_ = torch::where(reset_mask, torch::zeros_like(memory_phase_), memory_phase_);
+        }
+    } else {
+        below_threshold_counts_.zero_();
+    }
+
     // 2. Create mask for bins above threshold and above current memory
     // This determines which bins will be reinforced
     torch::Tensor above_threshold = mag_in > threshold_;
@@ -279,6 +343,13 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     }
 
     mag_attack_tensor = torch::clamp(mag_attack_tensor, 0.0f, 1.0f);
+
+    // Promote faster response for genuine onsets (memory close to zero)
+    torch::Tensor onset_mask = (memory_magnitude_ <= onset_floor_) & (mag_in > threshold_);
+    if (attack_onset_ >= static_cast<T>(0.0)) {
+        auto onset_attack_tensor = torch::full_like(mag_in, std::clamp(attack_onset_, static_cast<T>(0.0), static_cast<T>(1.0)));
+        mag_attack_tensor = torch::where(onset_mask, onset_attack_tensor, mag_attack_tensor);
+    }
 
     torch::Tensor attack_update = mag_attack_tensor * mag_in + (1.0f - mag_attack_tensor) * memory_magnitude_;
     memory_magnitude_ = torch::where(reinforce_mask, attack_update, memory_magnitude_);
@@ -311,6 +382,11 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
     }
 
     phase_attack_tensor = torch::clamp(phase_attack_tensor, 0.0f, 1.0f);
+
+    if (attack_onset_ >= static_cast<T>(0.0)) {
+        auto onset_phase_tensor = torch::full_like(phase_diff, std::clamp(attack_onset_, static_cast<T>(0.0), static_cast<T>(1.0)));
+        phase_attack_tensor = torch::where(onset_mask, onset_phase_tensor, phase_attack_tensor);
+    }
 
     auto phase_update = memory_phase_ + phase_attack_tensor * phase_diff;
     
@@ -399,6 +475,39 @@ void SpectralTrailsProcessor<T>::set_attack_dynamic_rate(T rate) {
 }
 
 template<typename T>
+void SpectralTrailsProcessor<T>::set_attack_onset(T attack_onset) {
+    if (attack_onset < static_cast<T>(0.0)) {
+        attack_onset_ = static_cast<T>(-1.0);
+        log("Attack onset disabled");
+        return;
+    }
+
+    attack_onset_ = std::clamp(attack_onset, static_cast<T>(0.0), static_cast<T>(1.0));
+    log("Attack onset set to: " + std::to_string(attack_onset_));
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_onset_floor(T floor) {
+    onset_floor_ = std::max(static_cast<T>(0.0), floor);
+    log("Onset floor set to: " + std::to_string(onset_floor_));
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_reset_frames(int frames) {
+    reset_frames_ = std::max(0, frames);
+    if (reset_frames_ == 0 && below_threshold_counts_.defined()) {
+        below_threshold_counts_.zero_();
+    }
+    log("Reset frames set to: " + std::to_string(reset_frames_));
+}
+
+template<typename T>
+void SpectralTrailsProcessor<T>::set_reset_multiplier(T multiplier) {
+    reset_multiplier_ = std::clamp(multiplier, static_cast<T>(0.0), static_cast<T>(1.0));
+    log("Reset multiplier set to: " + std::to_string(reset_multiplier_));
+}
+
+template<typename T>
 void SpectralTrailsProcessor<T>::set_limiter_softness(T softness) {
     limiter_softness_ = std::max(static_cast<T>(0.0), softness);
     log("Limiter softness set to: " + std::to_string(limiter_softness_));
@@ -415,6 +524,7 @@ void SpectralTrailsProcessor<T>::resize(size_t num_bins) {
     auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
     memory_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
     memory_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    below_threshold_counts_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
 
     log("Resized to " + std::to_string(num_bins_) + " bins");
 }
@@ -423,6 +533,9 @@ template<typename T>
 void SpectralTrailsProcessor<T>::reset_memory() {
     memory_magnitude_.zero_();
     memory_phase_.zero_();
+    if (below_threshold_counts_.defined()) {
+        below_threshold_counts_.zero_();
+    }
     log("Memory reset to zero");
 }
 
