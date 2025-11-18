@@ -236,8 +236,19 @@ std::vector<torch::Tensor> SpectralTrailsProcessor<T>::process_frame(
         memory_magnitude_ = torch::clamp(memory_magnitude_, 0.0f, max_value_);
     }
 
-    // 5. Lock phase for reinforced bins
-    memory_phase_ = torch::where(reinforce_mask, phase_in, memory_phase_);
+    // 5. Smooth phase interpolation for reinforced bins to avoid clicks
+    // Instead of abrupt phase replacement, interpolate between current and new phase
+    // Normalize phase difference to [-pi, pi] range
+    auto phase_diff = phase_in - memory_phase_;
+    
+    // Wrap phase difference to [-pi, pi] to find shortest rotation
+    phase_diff = torch::atan2(torch::sin(phase_diff), torch::cos(phase_diff));
+    
+    // Apply attack smoothing to phase as well (using same attack coefficient)
+    auto phase_update = memory_phase_ + attack_ * phase_diff;
+    
+    // Update phase only where bins are being reinforced
+    memory_phase_ = torch::where(reinforce_mask, phase_update, memory_phase_);
 
     // 6. Force DC and Nyquist phase to zero
     if (num_bins_ > 0) {
