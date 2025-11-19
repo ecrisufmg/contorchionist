@@ -260,12 +260,12 @@ static void *torch_irfft_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     x->overlap_factor_ = 1;
     x->output_n_ = 0; // 0 significa usar o tamanho do bloco como padrão
     x->use_input_phase_ = true; // Por padrão, usa a fase fornecida
-    x->enable_windowing_ = false; // Por padrão, janelamento desabilitado na IRFFT
+    x->enable_windowing_ = true; // Por padrão, janelamento habilitado na IRFFT
     
     // Parser de argumentos
     pd_utils::ArgParser parser(argc, argv, &x->x_obj);
     bool verbose_arg = parser.has_flag("verbose v");
-    bool enable_out_windowing = parser.has_flag("enablewindow winout wo");
+    bool disable_out_windowing = parser.has_flag("disable_windowing nowindowout nowinout nowin nw");
     
     // Parse device using the correct approach
     bool device_flag_present = parser.has_flag("device d");
@@ -282,7 +282,7 @@ static void *torch_irfft_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     x->overlap_factor_ = static_cast<int>(parser.get_float("overlap of", 1));
     x->output_n_ = static_cast<long>(parser.get_float("n output_n", 0));
     x->use_input_phase_ = static_cast<bool>(parser.get_float("use_phase", 1));
-    x->enable_windowing_ = enable_out_windowing;
+    x->enable_windowing_ = !disable_out_windowing; // Windowing habilitado por padrão
 
     // Instancia o RFFTProcessor. A maioria dos parâmetros são apenas placeholders,
     // pois a configuração real para IRFFT acontece em update_processor_settings.
