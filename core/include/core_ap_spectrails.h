@@ -31,6 +31,7 @@ public:
         : num_bins_(num_bins),
           device_(device),
           threshold_(static_cast<T>(0.01)),
+          attack_(static_cast<T>(0.7)),
           decay_(static_cast<T>(0.999)),
           min_peak_distance_bins_(static_cast<T>(2.0)),
           sample_rate_(static_cast<T>(44100.0)),
@@ -53,12 +54,14 @@ public:
     void reset_memory() {
         output_magnitude_.zero_();
         output_phase_.zero_();
+        target_magnitude_.zero_();
         previous_magnitude_.zero_();
         peak_magnitude_.zero_();
         last_written_peak_bin_.zero_();
     }
 
     void set_threshold(T value) { threshold_ = std::max(static_cast<T>(0), value); }
+    void set_attack(T value) { attack_ = std::clamp(value, static_cast<T>(0), static_cast<T>(1)); }
     void set_decay(T value) { decay_ = std::clamp(value, static_cast<T>(0), static_cast<T>(1)); }
     void set_min_peak_distance_hz(T value, T sample_rate) {
         sample_rate_ = sample_rate;
@@ -77,10 +80,15 @@ public:
         auto mag = magnitude_input.to(device_, torch::kFloat32);
         auto phase = phase_input.to(device_, torch::kFloat32);
 
-        // 1. Decay output table
-        output_magnitude_ *= decay_;
+        // 1. Apply attack ramp to reach target magnitudes
+        auto distance_to_target = target_magnitude_ - output_magnitude_;
+        output_magnitude_ += distance_to_target * attack_;
 
-        // 2. Age out old peak markers (clear peaks that have decayed away)
+        // 2. Decay all bins
+        output_magnitude_ *= decay_;
+        target_magnitude_ *= decay_;
+
+        // 3. Age out old peak markers (clear peaks that have decayed away)
         auto out_mag_check = output_magnitude_.template accessor<float, 1>();
         auto last_peak_check = last_written_peak_bin_.template accessor<float, 1>();
         for (long j = 0; j < static_cast<long>(num_bins_); ++j) {
@@ -89,11 +97,12 @@ public:
             }
         }
 
-        // 3. Detect peaks and track slopes
+        // 4. Detect peaks and track slopes
         auto mag_acc = mag.template accessor<float, 1>();
         auto phase_acc = phase.template accessor<float, 1>();
         auto prev_acc = previous_magnitude_.template accessor<float, 1>();
         auto peak_acc = peak_magnitude_.template accessor<float, 1>();
+        auto target_acc = target_magnitude_.template accessor<float, 1>();
         auto out_mag_acc = output_magnitude_.template accessor<float, 1>();
         auto out_phase_acc = output_phase_.template accessor<float, 1>();
         auto last_peak_bin_acc = last_written_peak_bin_.template accessor<float, 1>();
@@ -128,8 +137,8 @@ public:
                 }
 
                 if (far_enough) {
-                    // Write to output table with phase lock
-                    out_mag_acc[i] = curr_mag;
+                    // Set target magnitude (not immediate) and lock phase
+                    target_acc[i] = curr_mag;
                     out_phase_acc[i] = phase_acc[i];
                     last_peak_bin_acc[i] = static_cast<float>(i);
                     peak_acc[i] = 0.0f; // Reset peak tracker for this bin
@@ -166,6 +175,7 @@ private:
         auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
         output_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
         output_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        target_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
         previous_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
         peak_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
         last_written_peak_bin_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
@@ -175,11 +185,13 @@ private:
     torch::Device device_;
     torch::Tensor output_magnitude_;
     torch::Tensor output_phase_;
+    torch::Tensor target_magnitude_;
     torch::Tensor previous_magnitude_;
     torch::Tensor peak_magnitude_;
     torch::Tensor last_written_peak_bin_;
 
     T threshold_;
+    T attack_;
     T decay_;
     T min_peak_distance_bins_;
     T sample_rate_;

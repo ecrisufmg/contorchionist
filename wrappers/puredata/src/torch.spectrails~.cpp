@@ -15,6 +15,7 @@ typedef struct _torch_spectrails_tilde {
     size_t num_bins;
 
     float threshold;
+    float attack;
     float decay;
     float min_peak_distance_hz;
     float sample_rate;
@@ -27,6 +28,7 @@ static void torch_spectrails_tilde_configure_processor(t_torch_spectrails_tilde 
         return;
     }
     x->processor->set_threshold(x->threshold);
+    x->processor->set_attack(x->attack);
     x->processor->set_decay(x->decay);
     x->processor->set_min_peak_distance_hz(x->min_peak_distance_hz, x->sample_rate);
 }
@@ -123,6 +125,7 @@ static void *torch_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) {
     // Default parameters
     x->fft_size = 1024;
     x->threshold = 0.01f;
+    x->attack = 0.7f;
     x->decay = 0.999f;
     x->min_peak_distance_hz = 100.0f;
     x->sample_rate = 44100.0f;
@@ -134,13 +137,16 @@ static void *torch_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) {
         x->threshold = atom_getfloat(argv + 1);
     }
     if (argc > 2 && argv[2].a_type == A_FLOAT) {
-        x->decay = atom_getfloat(argv + 2);
+        x->attack = atom_getfloat(argv + 2);
     }
     if (argc > 3 && argv[3].a_type == A_FLOAT) {
-        x->min_peak_distance_hz = atom_getfloat(argv + 3);
+        x->decay = atom_getfloat(argv + 3);
     }
     if (argc > 4 && argv[4].a_type == A_FLOAT) {
-        x->sample_rate = atom_getfloat(argv + 4);
+        x->min_peak_distance_hz = atom_getfloat(argv + 4);
+    }
+    if (argc > 5 && argv[5].a_type == A_FLOAT) {
+        x->sample_rate = atom_getfloat(argv + 5);
     }
 
     x->num_bins = x->fft_size / 2 + 1;
@@ -167,6 +173,11 @@ static void torch_spectrails_tilde_free(t_torch_spectrails_tilde *x) {
 
 static void torch_spectrails_tilde_threshold(t_torch_spectrails_tilde *x, t_floatarg f) {
     x->threshold = f;
+    torch_spectrails_tilde_configure_processor(x);
+}
+
+static void torch_spectrails_tilde_attack(t_torch_spectrails_tilde *x, t_floatarg f) {
+    x->attack = f;
     torch_spectrails_tilde_configure_processor(x);
 }
 
@@ -202,6 +213,9 @@ extern "C" void setup_torch0x2espectrails_tilde(void) {
     class_addmethod(torch_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_spectrails_tilde_threshold),
                     gensym("threshold"), A_FLOAT, 0);
+    class_addmethod(torch_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_spectrails_tilde_attack),
+                    gensym("attack"), A_FLOAT, 0);
     class_addmethod(torch_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_spectrails_tilde_decay),
                     gensym("decay"), A_FLOAT, 0);
