@@ -34,6 +34,7 @@ typedef struct _torch_irfft_tilde {
     int overlap_factor_;
     long output_n_; // Tamanho da saída da IRFFT
     bool use_input_phase_; // Se deve usar a fase de entrada ou zerá-la
+    bool enable_windowing_; // Se deve aplicar janelamento na IRFFT
 
     // Estado do ambiente Pd
     int current_block_size_;
@@ -141,8 +142,8 @@ static void update_processor_settings(t_torch_irfft_tilde *x) {
     
     // Atualiza a janela de referência no processador antes de calcular a normalização
     x->rfft_processor_.set_window_type(x->win_ref_type_);
-    // Para IRFFT, a flag 'windowing_enabled' não se aplica, a janela é apenas para referência.
-    x->rfft_processor_.enable_windowing(false);
+    // Para IRFFT, windowing_enabled pode ser ativado pelo usuário via enablewindow
+    x->rfft_processor_.enable_windowing(x->enable_windowing_);
 
     try {
         // Chama set_normalization para o processo INVERSO
@@ -225,6 +226,14 @@ static void torch_irfft_tilde_use_phase(t_torch_irfft_tilde *x, t_floatarg f) {
     }
 }
 
+static void torch_irfft_tilde_enablewindow(t_torch_irfft_tilde *x, t_floatarg f) {
+    x->enable_windowing_ = static_cast<bool>(f);
+    update_processor_settings(x);
+    if (x->rfft_processor_.is_verbose()) {
+        post("torch.irfft~: Window application on IRFFT output %s.", x->enable_windowing_ ? "enabled" : "disabled");
+    }
+}
+
 static void torch_irfft_tilde_verbose(t_torch_irfft_tilde *x, t_floatarg f) {
     x->rfft_processor_.set_verbose(static_cast<bool>(f));
     post("torch.irfft~: Verbose mode %s.", static_cast<bool>(f) ? "enabled" : "disabled");
@@ -251,6 +260,7 @@ static void *torch_irfft_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     x->overlap_factor_ = 1;
     x->output_n_ = 0; // 0 significa usar o tamanho do bloco como padrão
     x->use_input_phase_ = true; // Por padrão, usa a fase fornecida
+    x->enable_windowing_ = false; // Por padrão, janelamento desabilitado na IRFFT
     
     // Parser de argumentos
     pd_utils::ArgParser parser(argc, argv, &x->x_obj);
@@ -323,6 +333,7 @@ extern "C" void setup_torch0x2eirfft_tilde(void) {
     class_addmethod(torch_irfft_tilde_class, (t_method)torch_irfft_tilde_overlap, gensym("overlap"), A_FLOAT, 0);
     class_addmethod(torch_irfft_tilde_class, (t_method)torch_irfft_tilde_output_n, gensym("n"), A_FLOAT, 0);
     class_addmethod(torch_irfft_tilde_class, (t_method)torch_irfft_tilde_use_phase, gensym("use_phase"), A_FLOAT, 0);
+    class_addmethod(torch_irfft_tilde_class, (t_method)torch_irfft_tilde_enablewindow, gensym("enablewindow"), A_FLOAT, 0);
     class_addmethod(torch_irfft_tilde_class, (t_method)torch_irfft_tilde_verbose, gensym("verbose"), A_FLOAT, 0);
 
     class_sethelpsymbol(torch_irfft_tilde_class, gensym("torch.irfft~"));

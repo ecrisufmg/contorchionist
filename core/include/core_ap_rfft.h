@@ -489,6 +489,15 @@ torch::Tensor RFFTProcessor<T>::process_irfft(const std::vector<torch::Tensor>& 
         time_signal = torch::real(complex_time_signal);
     }
 
+    // Apply windowing to IRFFT output if enabled
+    if (windowing_enabled_ && window_prepared_) {
+        // Ensure window matches time signal size
+        if (current_window_n_ != output_n) {
+            initialize_window(output_n);
+        }
+        time_signal = time_signal * window_;
+    }
+
     if (overlap_factor_ >= 1.0f) {
         time_signal = time_signal / overlap_factor_;
     }
