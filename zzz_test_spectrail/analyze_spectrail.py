@@ -108,20 +108,49 @@ def main() -> int:
     print("\nFrame with worst residual/input ratio:")
     print(f"  frame {idx} at t={time:.4f}s | ratio={delta[idx]:.3f}")
 
-    # Plot waveforms with hop grid
+    # Plot waveforms with hop grid and alternating colors per hop
     times = np.arange(min_len) / float(sr)
     grid_times = np.arange(0, min_len + GRID_SPACING_SAMPLES, GRID_SPACING_SAMPLES) / float(sr)
 
     fig, axes = plt.subplots(3, 1, figsize=(12, 8), sharex=True)
     data_list = [(x, "Input"), (y, "Output"), (residual, "Residual (output - input)")]
+    
+    # Define multiple colors for alternating hops
+    colors = [ '#d62728']
+    
+    # Offset for color alternation (64 samples delay)
+    color_offset_samples = 64
+    
     for ax, (sig, title) in zip(axes, data_list):
-        ax.plot(times, sig, linewidth=0.6)
+        # Samples 0-63: black
+        ax.plot(times[0:color_offset_samples], sig[0:color_offset_samples], 
+               linewidth=0.6, color='#000000')
+        
+        # From sample 64 onwards, plot in blocks of 2048 with alternating colors
+        # Block 1: samples 64 to 64+2048 (2112)
+        # Block 2: samples 2112 to 2112+2048 (4160)
+        # etc.
+        color_idx = 0
+        block_start = color_offset_samples
+        
+        while block_start < min_len:
+            block_end = min(block_start + GRID_SPACING_SAMPLES, min_len)
+            ax.plot(times[block_start:block_end], sig[block_start:block_end], 
+                   linewidth=0.6, color=colors[color_idx % len(colors)])
+            block_start = block_end
+            color_idx += 1
+        
         ax.set_ylabel(title)
         for t in grid_times:
             ax.axvline(t, color="gray", linewidth=0.3, alpha=0.4)
+        
+        # Add vertical line at sample 64
+        offset_time = color_offset_samples / float(sr)
+        ax.axvline(offset_time, color="red", linewidth=1.0, alpha=0.7, linestyle='--')
+        
         ax.grid(True, which="both", axis="x", linestyle="--", linewidth=0.2, alpha=0.5)
     axes[-1].set_xlabel("Tempo (s)")
-    fig.suptitle("torch.spectrail Diagnostics — Waveforms")
+    fig.suptitle("torch.spectrail Diagnostics — Waveforms (0-63 black, colors from 64 in 2048-blocks)")
     fig.tight_layout(rect=[0, 0.03, 1, 0.98])
     fig.savefig(PLOTS_PATH, dpi=200)
     plt.close(fig)
