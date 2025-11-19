@@ -55,6 +55,10 @@ public:
         output_magnitude_.zero_();
         output_phase_.zero_();
         target_magnitude_.zero_();
+        start_magnitude_.zero_();
+        target_phase_.zero_();
+        start_phase_.zero_();
+        envelope_position_.zero_();
         previous_magnitude_.zero_();
         peak_magnitude_.zero_();
         last_written_peak_bin_.zero_();
@@ -80,15 +84,24 @@ public:
         auto mag = magnitude_input.to(device_, torch::kFloat32);
         auto phase = phase_input.to(device_, torch::kFloat32);
 
-        // 1. Apply attack ramp to reach target magnitudes
-        auto distance_to_target = target_magnitude_ - output_magnitude_;
-        output_magnitude_ += distance_to_target * attack_;
+        // 1. Update envelope positions (move towards 1.0 using attack rate)
+        envelope_position_ = torch::clamp(envelope_position_ + attack_, 0.0f, 1.0f);
 
-        // 2. Decay all bins
+        // 2. Interpolate from start to target using envelope position
+        output_magnitude_ = start_magnitude_ + (target_magnitude_ - start_magnitude_) * envelope_position_;
+        
+        // Interpolate phase with proper wrapping (shortest path between angles)
+        auto phase_diff = target_phase_ - start_phase_;
+        // Wrap phase difference to [-pi, pi]
+        phase_diff = torch::atan2(torch::sin(phase_diff), torch::cos(phase_diff));
+        output_phase_ = start_phase_ + phase_diff * envelope_position_;
+
+        // 3. Decay all bins
         output_magnitude_ *= decay_;
         target_magnitude_ *= decay_;
+        start_magnitude_ *= decay_;
 
-        // 3. Age out old peak markers (clear peaks that have decayed away)
+        // 4. Age out old peak markers (clear peaks that have decayed away)
         auto out_mag_check = output_magnitude_.template accessor<float, 1>();
         auto last_peak_check = last_written_peak_bin_.template accessor<float, 1>();
         for (long j = 0; j < static_cast<long>(num_bins_); ++j) {
@@ -97,12 +110,14 @@ public:
             }
         }
 
-        // 4. Detect peaks and track slopes
+        // 5. Detect peaks and track slopes
         auto mag_acc = mag.template accessor<float, 1>();
         auto phase_acc = phase.template accessor<float, 1>();
         auto prev_acc = previous_magnitude_.template accessor<float, 1>();
         auto peak_acc = peak_magnitude_.template accessor<float, 1>();
         auto target_acc = target_magnitude_.template accessor<float, 1>();
+        auto start_acc = start_magnitude_.template accessor<float, 1>();
+        auto env_acc = envelope_position_.template accessor<float, 1>();
         auto out_mag_acc = output_magnitude_.template accessor<float, 1>();
         auto out_phase_acc = output_phase_.template accessor<float, 1>();
         auto last_peak_bin_acc = last_written_peak_bin_.template accessor<float, 1>();
@@ -126,7 +141,10 @@ public:
             bool was_at_peak = prev_mag >= (peak_acc[i] * 0.95f); // Within 5% of tracked peak
 
             // Trigger write: local peak, negative slope, was near maximum
-            if (is_peak && negative_slope && was_at_peak && curr_mag > threshold_) {
+            // CRITICAL: Only trigger if envelope is nearly complete (>0.95) to avoid re-triggering during attack
+            bool envelope_complete = env_acc[i] > 0.95f;
+            
+            if (is_peak && negative_slope && was_at_peak && curr_mag > threshold_ && envelope_complete) {
                 // Check minimum distance from last written peak
                 bool far_enough = true;
                 for (long j = 0; j < static_cast<long>(num_bins_); ++j) {
@@ -136,10 +154,21 @@ public:
                     }
                 }
 
-                if (far_enough) {
-                    // Set target magnitude (not immediate) and lock phase
+                // Additional check: only trigger if new peak is significantly higher than current output
+                bool significant_increase = curr_mag > (out_mag_acc[i] * 1.1f);
+
+                if (far_enough && significant_increase) {
+                    // Start new envelope: save current position as start, set new target
+                    start_acc[i] = out_mag_acc[i];
                     target_acc[i] = curr_mag;
-                    out_phase_acc[i] = phase_acc[i];
+                    
+                    // Phase envelope
+                    auto start_phase_acc = start_phase_.template accessor<float, 1>();
+                    auto target_phase_acc = target_phase_.template accessor<float, 1>();
+                    start_phase_acc[i] = out_phase_acc[i];
+                    target_phase_acc[i] = phase_acc[i];
+                    
+                    env_acc[i] = 0.0f; // Reset envelope to beginning
                     last_peak_bin_acc[i] = static_cast<float>(i);
                     peak_acc[i] = 0.0f; // Reset peak tracker for this bin
                 }
@@ -176,6 +205,10 @@ private:
         output_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
         output_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
         target_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        start_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        target_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        start_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        envelope_position_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
         previous_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
         peak_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
         last_written_peak_bin_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
@@ -186,6 +219,10 @@ private:
     torch::Tensor output_magnitude_;
     torch::Tensor output_phase_;
     torch::Tensor target_magnitude_;
+    torch::Tensor start_magnitude_;
+    torch::Tensor target_phase_;
+    torch::Tensor start_phase_;
+    torch::Tensor envelope_position_;
     torch::Tensor previous_magnitude_;
     torch::Tensor peak_magnitude_;
     torch::Tensor last_written_peak_bin_;
