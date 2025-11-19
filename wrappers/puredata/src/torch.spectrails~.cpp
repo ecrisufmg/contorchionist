@@ -5,10 +5,13 @@
 #include <memory>
 #include <torch/torch.h>
 
+#include "../utils/include/pd_arg_parser.h"
+
 using Processor = contorchionist::core::ap_spectrails::SpectralTrailsProcessor<float>;
 
 typedef struct _torch_spectrails_tilde {
     t_object x_obj;
+    t_sample x_f_dummy; // Dummy para CLASS_MAINSIGNALIN
     std::unique_ptr<Processor> processor;
 
     size_t fft_size;
@@ -18,7 +21,10 @@ typedef struct _torch_spectrails_tilde {
     float attack;
     float decay;
     float min_peak_distance_hz;
-    float sample_rate;
+    
+    // Estado do ambiente Pd
+    int current_block_size_;
+    float sampling_rate_;
 } t_torch_spectrails_tilde;
 
 static t_class *torch_spectrails_tilde_class = nullptr;
@@ -30,7 +36,7 @@ static void torch_spectrails_tilde_configure_processor(t_torch_spectrails_tilde 
     x->processor->set_threshold(x->threshold);
     x->processor->set_attack(x->attack);
     x->processor->set_decay(x->decay);
-    x->processor->set_min_peak_distance_hz(x->min_peak_distance_hz, x->sample_rate);
+    x->processor->set_min_peak_distance_hz(x->min_peak_distance_hz, x->sampling_rate_);
 }
 
 static void torch_spectrails_tilde_resize_processor(t_torch_spectrails_tilde *x, size_t fft_size) {
@@ -102,10 +108,21 @@ static t_int *torch_spectrails_tilde_perform(t_int *w) {
 }
 
 static void torch_spectrails_tilde_dsp(t_torch_spectrails_tilde *x, t_signal **sp) {
-    size_t block_fft = static_cast<size_t>(sp[0]->s_n);
-    if (block_fft != x->fft_size) {
-        torch_spectrails_tilde_resize_processor(x, block_fft);
-        post("torch.spectrails~: resized to fftsize %zu", x->fft_size);
+    bool block_size_changed = (x->current_block_size_ != sp[0]->s_n);
+    bool sample_rate_changed = (x->sampling_rate_ != sys_getsr());
+
+    if (block_size_changed) {
+        x->current_block_size_ = sp[0]->s_n;
+        size_t block_fft = static_cast<size_t>(sp[0]->s_n);
+        if (block_fft != x->fft_size) {
+            torch_spectrails_tilde_resize_processor(x, block_fft);
+            post("torch.spectrails~: resized to fftsize %zu", x->fft_size);
+        }
+    }
+    
+    if (sample_rate_changed) {
+        x->sampling_rate_ = sys_getsr();
+        torch_spectrails_tilde_configure_processor(x); // Atualiza min_peak_distance com nova taxa
     }
 
     dsp_add(torch_spectrails_tilde_perform, 6, x,
@@ -122,33 +139,29 @@ static void *torch_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) {
         return nullptr;
     }
 
-    // Default parameters
-    x->fft_size = 1024;
+    // Valores padrão
+    x->current_block_size_ = 0;
+    x->sampling_rate_ = sys_getsr() > 0 ? sys_getsr() : 48000.0f;
     x->threshold = 0.01f;
     x->attack = 0.7f;
     x->decay = 0.999f;
     x->min_peak_distance_hz = 100.0f;
-    x->sample_rate = 44100.0f;
 
-    if (argc > 0 && argv[0].a_type == A_FLOAT && atom_getfloat(argv) > 0) {
-        x->fft_size = static_cast<size_t>(atom_getfloat(argv));
-    }
-    if (argc > 1 && argv[1].a_type == A_FLOAT) {
-        x->threshold = atom_getfloat(argv + 1);
-    }
-    if (argc > 2 && argv[2].a_type == A_FLOAT) {
-        x->attack = atom_getfloat(argv + 2);
-    }
-    if (argc > 3 && argv[3].a_type == A_FLOAT) {
-        x->decay = atom_getfloat(argv + 3);
-    }
-    if (argc > 4 && argv[4].a_type == A_FLOAT) {
-        x->min_peak_distance_hz = atom_getfloat(argv + 4);
-    }
-    if (argc > 5 && argv[5].a_type == A_FLOAT) {
-        x->sample_rate = atom_getfloat(argv + 5);
-    }
+    // Parser de argumentos com flags
+    pd_utils::ArgParser parser(argc, argv, &x->x_obj);
+    
+    x->threshold = parser.get_float("threshold thresh t", 0.01f);
+    x->attack = parser.get_float("attack att a", 0.7f);
+    x->decay = parser.get_float("decay dec d", 0.999f);
+    x->min_peak_distance_hz = parser.get_float("min_peak_distance mindist mpd", 100.0f);
 
+    // FFT size será determinado automaticamente pelo block size no DSP
+    // mas permitimos override inicial se especificado
+    x->fft_size = static_cast<size_t>(parser.get_float("fftsize fft n", 0));
+    if (x->fft_size == 0) {
+        x->fft_size = 1024; // Tamanho inicial padrão
+    }
+    
     x->num_bins = x->fft_size / 2 + 1;
 
     try {
@@ -163,7 +176,8 @@ static void *torch_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) {
     outlet_new(&x->x_obj, &s_signal);
     outlet_new(&x->x_obj, &s_signal);
 
-    post("torch.spectrails~: peak tracking spectral trails (fftsize=%zu)", x->fft_size);
+    post("torch.spectrails~: threshold=%.4f attack=%.3f decay=%.4f min_peak_dist=%.1fHz", 
+         x->threshold, x->attack, x->decay, x->min_peak_distance_hz);
     return x;
 }
 
@@ -205,7 +219,7 @@ extern "C" void setup_torch0x2espectrails_tilde(void) {
                                              CLASS_DEFAULT,
                                              A_GIMME, 0);
 
-    CLASS_MAINSIGNALIN(torch_spectrails_tilde_class, t_torch_spectrails_tilde, threshold);
+    CLASS_MAINSIGNALIN(torch_spectrails_tilde_class, t_torch_spectrails_tilde, x_f_dummy);
     class_addmethod(torch_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_spectrails_tilde_dsp),
                     gensym("dsp"), A_CANT, 0);
