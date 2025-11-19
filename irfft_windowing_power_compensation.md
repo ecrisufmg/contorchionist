@@ -231,3 +231,21 @@ if (windowing_enabled_ && window_prepared_) {
 - [ ] Criar mensagem `winoutgain` no wrapper Pd
 - [ ] Testar com diferentes combinações janela/overlap
 - [ ] Documentar fatores de compensação para janelas comuns
+
+
+
+
+
+
+Não está bom. Deu ganho. Ao comentar a compensação que você incluiu e tentar criar manualmente, percebi que a compensação deve ser dependente do fator de overlap (e, para overlap=2, também varia com o tamanho da janela)
+
+Para tamanho de janela, fator de overlap, tipo de janela, esses fatores de compensação parecem funcionar:
+
+1024 2 hann -> 1.297777
+1024 4 hann -> 1.333333 
+1024 8 hann -> 1.333333
+2048 2 hann -> 1.131373
+2048 4 hann -> 1.333333
+2048 8 hann -> 1.333333
+
+Lembre-se: o overlap é feito pelo PureData, já que os objetos funcionam dentro de um patch que faz o ajuste automatico de bloco e overlap
