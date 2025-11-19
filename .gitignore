@@ -53,3 +53,5 @@ lib/
 *.gcda
 *.gcov
 
+#zzz_test_spectrail
+zzz_test_spectrail/*.wav
