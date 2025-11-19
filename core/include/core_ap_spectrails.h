@@ -72,6 +72,18 @@ public:
         min_peak_distance_bins_ = (value * fft_size_) / sample_rate_;
     }
 
+    // Get/set envelope positions for multi-channel synchronization
+    torch::Tensor get_envelope_positions() const {
+        return envelope_position_.clone();
+    }
+
+    void set_envelope_positions(const torch::Tensor& envelope) {
+        if (envelope.size(0) != static_cast<long>(num_bins_)) {
+            throw std::invalid_argument("SpectralTrailsProcessor: envelope size mismatch");
+        }
+        envelope_position_ = envelope.to(device_, torch::kFloat32);
+    }
+
     std::vector<torch::Tensor> process_frame(const torch::Tensor& magnitude_input,
                                              const torch::Tensor& phase_input) {
         if (magnitude_input.size(0) != static_cast<long>(num_bins_)) {
