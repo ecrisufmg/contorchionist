@@ -7,6 +7,7 @@
 #include <torch/torch.h>
 
 #include "../utils/include/pd_arg_parser.h"
+#include "../utils/include/pd_torch_device_adapter.h"
 
 using Processor = contorchionist::core::ap_spectrails::SpectralTrailsProcessor<float>;
 
@@ -16,6 +17,7 @@ typedef struct _torch_amb_spectrails_tilde {
     
     int ambi_order_; // Ordem ambisônica (1, 2, 3, etc.)
     int num_channels_; // B = (N+1)^2
+    torch::Device device_; // Dispositivo de processamento (CPU/CUDA/MPS)
     
     // Um processador por canal (todos compartilham envelope do canal 0)
     std::vector<std::unique_ptr<Processor>> processors_;
@@ -143,19 +145,30 @@ static t_int *torch_amb_spectrails_tilde_perform(t_int *w) {
                                                torch::TensorOptions().dtype(torch::kFloat32))
                                    .clone();
 
+        // Processa W e detecta onde houve escrita de novos picos
+        auto w_envelope_before = x->processors_[0]->get_envelope_positions();
         auto w_outputs = x->processors_[0]->process_frame(w_mag_tensor, w_phase_tensor);
+        auto w_envelope_after = x->processors_[0]->get_envelope_positions();
         
-        // Copia envelope do canal 0 para todos os outros canais
-        auto w_envelope = x->processors_[0]->get_envelope_positions();
+        // Detecta bins onde envelope foi resetado (novos picos escritos)
+        // Se envelope passou de >0.9 para ~0.0, houve escrita
+        auto bins_written = (w_envelope_before > 0.9f) & (w_envelope_after < 0.1f);
         
+        // Sincroniza envelope positions em todos os canais
         for (int ch = 1; ch < x->num_channels_; ++ch) {
             if (x->processors_[ch]) {
-                x->processors_[ch]->set_envelope_positions(w_envelope);
+                x->processors_[ch]->set_envelope_positions(w_envelope_after);
             }
         }
         
-        // Agora processa todos os canais (incluindo W novamente para consistência)
-        for (int ch = 0; ch < x->num_channels_; ++ch) {
+        // Copia saída de W (move para CPU se necessário)
+        auto w_mag_out = w_outputs[0].to(torch::kCPU).contiguous();
+        auto w_phase_out = w_outputs[1].to(torch::kCPU).contiguous();
+        std::memcpy(out_mags[0], w_mag_out.data_ptr<float>(), num_bins * sizeof(float));
+        std::memcpy(out_phases[0], w_phase_out.data_ptr<float>(), num_bins * sizeof(float));
+        
+        // Processa outros canais (X, Y, Z, ...) e força escrita nos bins detectados em W
+        for (int ch = 1; ch < x->num_channels_; ++ch) {
             auto mag_tensor = torch::from_blob(in_mags[ch],
                                                {static_cast<long>(num_bins)},
                                                torch::TensorOptions().dtype(torch::kFloat32))
@@ -165,17 +178,22 @@ static t_int *torch_amb_spectrails_tilde_perform(t_int *w) {
                                                  torch::TensorOptions().dtype(torch::kFloat32))
                                      .clone();
 
-            auto outputs = x->processors_[ch]->process_frame(mag_tensor, phase_tensor);
-            auto processed_mag = outputs[0].to(torch::kCPU);
-            auto processed_phase = outputs[1].to(torch::kCPU);
-
-            auto mag_acc = processed_mag.accessor<float, 1>();
-            auto phase_acc = processed_phase.accessor<float, 1>();
-            
-            for (size_t i = 0; i < num_bins; ++i) {
-                out_mags[ch][i] = mag_acc[i];
-                out_phases[ch][i] = phase_acc[i];
+            // CRÍTICO: Força escrita nos mesmos bins que W detectou
+            if (bins_written.any().item<bool>()) {
+                x->processors_[ch]->force_write_bins(bins_written.to(torch::kFloat32), 
+                                                      mag_tensor, phase_tensor);
             }
+            
+            auto outputs = x->processors_[ch]->process_frame(mag_tensor, phase_tensor);
+            auto processed_mag = outputs[0].to(torch::kCPU).contiguous();
+            auto processed_phase = outputs[1].to(torch::kCPU).contiguous();
+            
+            std::memcpy(out_mags[ch], processed_mag.data_ptr<float>(), num_bins * sizeof(float));
+            std::memcpy(out_phases[ch], processed_phase.data_ptr<float>(), num_bins * sizeof(float));
+        }
+        
+        // Zera bins acima de Nyquist
+        for (int ch = 0; ch < x->num_channels_; ++ch) {
             for (size_t i = num_bins; i < static_cast<size_t>(n); ++i) {
                 out_mags[ch][i] = 0.0f;
                 out_phases[ch][i] = 0.0f;
@@ -298,6 +316,16 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
 
     // Parser de argumentos
     pd_utils::ArgParser parser(argc, argv, &x->x_obj);
+    bool verbose_arg = parser.has_flag("verbose v");
+    
+    // Parse device using the correct approach
+    bool device_flag_present = parser.has_flag("device d");
+    std::string device_arg_str = parser.get_string("device d", "cpu");
+    
+    // Get device from string
+    auto device_result = get_device_from_string(device_arg_str);
+    torch::Device device = device_result.first;
+    bool device_parse_success = device_result.second;
     
     x->ambi_order_ = static_cast<int>(parser.get_float("order ord o", 1));
     if (x->ambi_order_ < 1) {
@@ -314,19 +342,19 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     x->num_channels_ = (x->ambi_order_ + 1) * (x->ambi_order_ + 1); // B = (N+1)^2
     post("torch.amb.spectrails~: order=%d, num_channels=%d", x->ambi_order_, x->num_channels_);
     
-    x->threshold_ = parser.get_float("threshold thresh t", 0.01f);
-    x->attack_ = parser.get_float("attack att a", 0.7f);
+    x->threshold_ = parser.get_float("threshold thresh", 0.01f);
+    x->attack_ = parser.get_float("attack att", 0.7f);
     x->overlap_factor_ = static_cast<int>(parser.get_float("overlap of", 4));
     
     post("torch.amb.spectrails~: params - thresh=%.3f, attack=%.3f, overlap=%d", 
          x->threshold_, x->attack_, x->overlap_factor_);
     
-    float decaytime_sec = parser.get_float("decaytime decayt dtime dt", -1.0f);
+    float decaytime_sec = parser.get_float("decaytime decayt dtime", -1.0f);
     if (decaytime_sec > 0.0f) {
         size_t temp_fft_size = static_cast<size_t>(parser.get_float("fftsize fft n", 1024));
         x->decay_ = decaytime_to_decay_factor(decaytime_sec, x->sampling_rate_, temp_fft_size, x->overlap_factor_);
     } else {
-        x->decay_ = parser.get_float("decay dec d", 0.999f);
+        x->decay_ = parser.get_float("decay dec", 0.999f);
     }
     
     x->min_peak_distance_hz_ = parser.get_float("min_peak_distance mindist mpd", 100.0f);
@@ -338,11 +366,17 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     
     x->num_bins_ = x->fft_size_ / 2 + 1;
 
+    // Initialize device and apply device parsing
+    x->device_ = device;
+    torch::Device final_device = device;
+    pd_parse_and_set_torch_device(&x->x_obj, final_device, device_arg_str, verbose_arg, "torch.amb.spectrails~", device_flag_present);
+    x->device_ = final_device;
+    
     // Cria processadores para cada canal
     post("torch.amb.spectrails~: creating %d processors...", x->num_channels_);
     try {
         for (int ch = 0; ch < x->num_channels_; ++ch) {
-            x->processors_.push_back(std::make_unique<Processor>(x->num_bins_, torch::kCPU));
+            x->processors_.push_back(std::make_unique<Processor>(x->num_bins_, x->device_));
         }
         post("torch.amb.spectrails~: processors created successfully");
         torch_amb_spectrails_tilde_configure_processors(x);
@@ -375,8 +409,9 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
         x->outlets_.push_back(outlet_new(&x->x_obj, &s_signal));
     }
 
-    post("torch.amb.spectrails~: order=%d channels=%d (%.1fHz thresh, %.3f att, %.4f dec, overlap=%d) - READY", 
-         x->ambi_order_, x->num_channels_, x->min_peak_distance_hz_, x->attack_, x->decay_, x->overlap_factor_);
+    post("torch.amb.spectrails~: order=%d channels=%d (%.1fHz thresh, %.3f att, %.4f dec, overlap=%d) [%s] - READY", 
+         x->ambi_order_, x->num_channels_, x->min_peak_distance_hz_, x->attack_, x->decay_, x->overlap_factor_,
+         pd_torch_device_friendly_name(x->device_).c_str());
     
     return x;
 }
