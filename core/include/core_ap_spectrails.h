@@ -33,6 +33,45 @@ enum class DetectionMode {
  */
 template <typename T>
 class SpectralTrailsProcessor {
+private:
+    // Declare private members FIRST so inline methods can use them
+    size_t num_bins_;
+    torch::Device device_;
+    torch::Tensor output_magnitude_;
+    torch::Tensor output_phase_;
+    torch::Tensor target_magnitude_;
+    torch::Tensor start_magnitude_;
+    torch::Tensor target_phase_;
+    torch::Tensor start_phase_;
+    torch::Tensor envelope_position_;
+    torch::Tensor previous_magnitude_;
+    torch::Tensor peak_magnitude_;
+    torch::Tensor last_written_peak_bin_;
+
+    T threshold_;
+    T attack_;
+    T decay_;
+    T min_peak_distance_bins_;
+    T sample_rate_;
+    T fft_size_;
+    DetectionMode detection_mode_;
+    T prominence_threshold_;
+    bool use_parabolic_interp_;
+
+    void allocate_memory() {
+        auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
+        output_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        output_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        target_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        start_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        target_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        start_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        envelope_position_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        previous_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        peak_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+        last_written_peak_bin_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
+    }
+
 public:
     explicit SpectralTrailsProcessor(size_t num_bins,
                                      torch::Device device = torch::kCPU)
@@ -176,6 +215,50 @@ public:
         auto out_phase_acc = output_phase_.template accessor<float, 1>();
         auto last_peak_bin_acc = last_written_peak_bin_.template accessor<float, 1>();
 
+        // Calculate percentile threshold if in prominence mode
+        float percentile_threshold = 0.0f;
+        if (detection_mode_ == DetectionMode::PROMINENCE && use_parabolic_interp_) {
+            // PASSO 1: Detectar todos os picos locais
+            // PASSO 2: Calcular magnitude/fase interpolada para cada pico
+            // PASSO 3: Calcular percentil das magnitudes interpoladas
+            std::vector<float> interpolated_peak_mags;
+            
+            for (long i = 1; i < static_cast<long>(num_bins_) - 1; ++i) {
+                float curr_mag = mag_acc[i];
+                float left_mag = mag_acc[i - 1];
+                float right_mag = mag_acc[i + 1];
+                bool is_local_peak = (curr_mag > left_mag) && (curr_mag > right_mag) && (curr_mag > threshold_);
+                
+                if (is_local_peak) {
+                    // Parabolic interpolation para magnitude refinada
+                    float left_sq = left_mag * left_mag;
+                    float right_sq = right_mag * right_mag;
+                    float windpower = (left_mag + right_mag - 2.0f * curr_mag);
+                    
+                    float detune = 0.0f;
+                    if (std::abs(windpower) > 1e-10f) {
+                        detune = (right_sq - left_sq) / (2.0f * windpower);
+                        detune = std::clamp(detune, -0.5f, 0.5f);
+                    }
+                    
+                    // Magnitude interpolada (correção por janelamento já foi aplicada antes)
+                    // Aproximação: magnitude no pico real é ligeiramente maior
+                    float pidetune = static_cast<float>(M_PI) * detune;
+                    float ampcorrect = 1.0f / (1.0f - 0.5f * std::cos(pidetune)); // Hann window correction
+                    float interpolated_mag = curr_mag * ampcorrect;
+                    
+                    interpolated_peak_mags.push_back(interpolated_mag);
+                }
+            }
+            
+            // Calcular percentil
+            if (!interpolated_peak_mags.empty()) {
+                std::sort(interpolated_peak_mags.begin(), interpolated_peak_mags.end());
+                size_t percentile_idx = static_cast<size_t>(prominence_threshold_ * (interpolated_peak_mags.size() - 1));
+                percentile_threshold = interpolated_peak_mags[percentile_idx];
+            }
+        }
+
         for (long i = 1; i < static_cast<long>(num_bins_) - 1; ++i) {
             float curr_mag = mag_acc[i];
             float prev_mag = prev_acc[i];
@@ -186,55 +269,79 @@ public:
             bool is_peak = (curr_mag > left_mag) && (curr_mag > right_mag) && (curr_mag > threshold_);
 
             bool should_trigger = false;
+            float detune = 0.0f;
+            float interpolated_mag = curr_mag;
+            float interpolated_phase = phase_acc[i];
             
-            if (detection_mode_ == DetectionMode::PROMINENCE) {
-                // Prominence mode: relative threshold + parabolic interpolation
-                // Compare with bins at distance ±2 (like sigmund~)
-                float left2_mag = (i >= 2) ? mag_acc[i - 2] : 0.0f;
-                float right2_mag = (i < static_cast<long>(num_bins_) - 2) ? mag_acc[i + 2] : 0.0f;
+            // PASSO 2: Calcular magnitude e fase interpoladas (parabolic interpolation)
+            if (is_peak && use_parabolic_interp_) {
+                float left_sq = left_mag * left_mag;
+                float right_sq = right_mag * right_mag;
+                float windpower = (left_mag + right_mag - 2.0f * curr_mag);
                 
-                // Relative threshold: peak must exceed prominence_threshold * (neighbor peaks)
-                float neighbor_power = left2_mag + right2_mag;
-                bool prominent_peak = is_peak && (curr_mag > prominence_threshold_ * neighbor_power);
-                
-                // Check envelope state
-                bool envelope_complete = env_acc[i] > 0.95f;
-                bool significant_increase = curr_mag > (out_mag_acc[i] * 1.1f);
-                
-                should_trigger = prominent_peak && envelope_complete && significant_increase;
-                
-                // Parabolic interpolation for refined frequency (if enabled)
-                if (should_trigger && use_parabolic_interp_) {
-                    // Calculate detune using quadratic interpolation
-                    // detune = ((right² - left²)) / (2 * (2*center - left - right))
-                    float left_sq = left_mag * left_mag;
-                    float right_sq = right_mag * right_mag;
-                    float windpower = (left_mag + right_mag - 2.0f * curr_mag);
+                if (std::abs(windpower) > 1e-10f) {
+                    detune = (right_sq - left_sq) / (2.0f * windpower);
+                    detune = std::clamp(detune, -0.5f, 0.5f);
                     
-                    if (std::abs(windpower) > 1e-10f) {
-                        float detune = (right_sq - left_sq) / (2.0f * windpower);
-                        detune = std::clamp(detune, -0.5f, 0.5f);
-                        // Store detune for potential future use (frequency refinement)
-                        // For now, we just detect at bin centers
+                    // Correção de amplitude por janelamento
+                    float pidetune = static_cast<float>(M_PI) * detune;
+                    float sinpidetune = std::sin(pidetune);
+                    float cospidetune = std::cos(pidetune);
+                    float ampcorrect = 1.0f / (1.0f - 0.5f * std::cos(pidetune));
+                    
+                    // Magnitude interpolada
+                    interpolated_mag = curr_mag * ampcorrect;
+                    
+                    // Fase interpolada (rotação pelo detune)
+                    float left_phase = (i > 0) ? phase_acc[i - 1] : 0.0f;
+                    float right_phase = (i < static_cast<long>(num_bins_) - 1) ? phase_acc[i + 1] : 0.0f;
+                    
+                    // Interpolação linear de fase (poderia ser melhorada)
+                    if (detune > 0) {
+                        interpolated_phase = phase_acc[i] + detune * (right_phase - phase_acc[i]);
+                    } else {
+                        interpolated_phase = phase_acc[i] + (-detune) * (phase_acc[i] - left_phase);
                     }
                 }
-            } else {
-                // Original slope-based mode
-                // Update peak tracker
-                if (curr_mag > peak_acc[i]) {
-                    peak_acc[i] = curr_mag;
+            }
+            
+            // PASSO 3: Aplicar critério de filtragem (slope ou percentil)
+            if (detection_mode_ == DetectionMode::PROMINENCE) {
+                // Prominence mode: slope + filtro por percentil de magnitude interpolada
+                
+                // Update peak tracker (usando magnitude interpolada)
+                if (interpolated_mag > peak_acc[i]) {
+                    peak_acc[i] = interpolated_mag;
                 }
 
-                // Detect negative slope (started decaying from peak)
-                bool negative_slope = curr_mag < prev_mag;
-                bool was_at_peak = prev_mag >= (peak_acc[i] * 0.95f); // Within 5% of tracked peak
-
-                // Trigger write: local peak, negative slope, was near maximum
-                // CRITICAL: Only trigger if envelope is nearly complete (>0.95) to avoid re-triggering during attack
+                // Detect negative slope (usando magnitude interpolada)
+                bool negative_slope = interpolated_mag < prev_acc[i];
+                bool was_at_peak = prev_acc[i] >= (peak_acc[i] * 0.95f);
                 bool envelope_complete = env_acc[i] > 0.95f;
-                bool significant_increase = curr_mag > (out_mag_acc[i] * 1.1f);
+                bool significant_increase = interpolated_mag > (out_mag_acc[i] * 1.1f);
                 
-                should_trigger = is_peak && negative_slope && was_at_peak && curr_mag > threshold_ && envelope_complete && significant_increase;
+                // Filtro adicional: magnitude interpolada acima do percentil
+                bool above_percentile = interpolated_mag > percentile_threshold;
+                
+                should_trigger = is_peak && negative_slope && was_at_peak && 
+                                interpolated_mag > threshold_ && envelope_complete && 
+                                significant_increase && above_percentile;
+            } else {
+                // Original slope-based mode (usando magnitude interpolada se disponível)
+                // Update peak tracker
+                if (interpolated_mag > peak_acc[i]) {
+                    peak_acc[i] = interpolated_mag;
+                }
+
+                // Detect negative slope
+                bool negative_slope = interpolated_mag < prev_acc[i];
+                bool was_at_peak = prev_acc[i] >= (peak_acc[i] * 0.95f);
+                bool envelope_complete = env_acc[i] > 0.95f;
+                bool significant_increase = interpolated_mag > (out_mag_acc[i] * 1.1f);
+                
+                should_trigger = is_peak && negative_slope && was_at_peak && 
+                                interpolated_mag > threshold_ && envelope_complete && 
+                                significant_increase;
             }
 
             if (should_trigger) {
@@ -248,19 +355,55 @@ public:
                 }
 
                 if (far_enough) {
-                    // Start new envelope: save current position as start, set new target
-                    start_acc[i] = out_mag_acc[i];
-                    target_acc[i] = curr_mag;
-                    
-                    // Phase envelope
-                    auto start_phase_acc = start_phase_.template accessor<float, 1>();
-                    auto target_phase_acc = target_phase_.template accessor<float, 1>();
-                    start_phase_acc[i] = out_phase_acc[i];
-                    target_phase_acc[i] = phase_acc[i];
-                    
-                    env_acc[i] = 0.0f; // Reset envelope to beginning
-                    last_peak_bin_acc[i] = static_cast<float>(i);
-                    peak_acc[i] = 0.0f; // Reset peak tracker for this bin
+                    // PASSO 4: Redistribuir energia nos bins corretos baseado no detune
+                    if (use_parabolic_interp_ && std::abs(detune) > 0.01f) {
+                        // Energia distribuída proporcionalmente entre bins adjacentes
+                        // Se detune > 0: pico está entre bin[i] e bin[i+1]
+                        // Se detune < 0: pico está entre bin[i-1] e bin[i]
+                        
+                        float abs_detune = std::abs(detune);
+                        long target_bin = i;
+                        long adjacent_bin = (detune > 0) ? (i + 1) : (i - 1);
+                        
+                        // Proporção de energia: (1-abs_detune) no bin principal, abs_detune no adjacente
+                        float main_weight = 1.0f - abs_detune;
+                        float adjacent_weight = abs_detune;
+                        
+                        // Bin principal
+                        start_acc[target_bin] = out_mag_acc[target_bin];
+                        target_acc[target_bin] = interpolated_mag * main_weight;
+                        
+                        auto start_phase_acc = start_phase_.template accessor<float, 1>();
+                        auto target_phase_acc = target_phase_.template accessor<float, 1>();
+                        start_phase_acc[target_bin] = out_phase_acc[target_bin];
+                        target_phase_acc[target_bin] = interpolated_phase;
+                        
+                        env_acc[target_bin] = 0.0f;
+                        last_peak_bin_acc[target_bin] = static_cast<float>(target_bin);
+                        peak_acc[target_bin] = 0.0f;
+                        
+                        // Bin adjacente (se válido)
+                        if (adjacent_bin > 0 && adjacent_bin < static_cast<long>(num_bins_) - 1) {
+                            start_acc[adjacent_bin] = out_mag_acc[adjacent_bin];
+                            target_acc[adjacent_bin] = interpolated_mag * adjacent_weight;
+                            start_phase_acc[adjacent_bin] = out_phase_acc[adjacent_bin];
+                            target_phase_acc[adjacent_bin] = interpolated_phase;
+                            env_acc[adjacent_bin] = 0.0f;
+                        }
+                    } else {
+                        // Sem redistribuição: escreve apenas no bin central
+                        start_acc[i] = out_mag_acc[i];
+                        target_acc[i] = interpolated_mag;
+                        
+                        auto start_phase_acc = start_phase_.template accessor<float, 1>();
+                        auto target_phase_acc = target_phase_.template accessor<float, 1>();
+                        start_phase_acc[i] = out_phase_acc[i];
+                        target_phase_acc[i] = interpolated_phase;
+                        
+                        env_acc[i] = 0.0f;
+                        last_peak_bin_acc[i] = static_cast<float>(i);
+                        peak_acc[i] = 0.0f;
+                    }
                 }
             }
 
@@ -288,44 +431,6 @@ public:
 
         return {out_mag, out_phase};
     }
-
-private:
-    void allocate_memory() {
-        auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
-        output_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
-        output_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
-        target_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
-        start_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
-        target_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
-        start_phase_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
-        envelope_position_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
-        previous_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
-        peak_magnitude_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
-        last_written_peak_bin_ = torch::zeros({static_cast<long>(num_bins_)}, opts);
-    }
-
-    size_t num_bins_;
-    torch::Device device_;
-    torch::Tensor output_magnitude_;
-    torch::Tensor output_phase_;
-    torch::Tensor target_magnitude_;
-    torch::Tensor start_magnitude_;
-    torch::Tensor target_phase_;
-    torch::Tensor start_phase_;
-    torch::Tensor envelope_position_;
-    torch::Tensor previous_magnitude_;
-    torch::Tensor peak_magnitude_;
-    torch::Tensor last_written_peak_bin_;
-
-    T threshold_;
-    T attack_;
-    T decay_;
-    T min_peak_distance_bins_;
-    T sample_rate_;
-    T fft_size_;
-    DetectionMode detection_mode_;
-    T prominence_threshold_;
-    bool use_parabolic_interp_;
 };
 
 }  // namespace ap_spectrails
