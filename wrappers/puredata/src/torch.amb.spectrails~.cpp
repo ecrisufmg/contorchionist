@@ -35,6 +35,8 @@ typedef struct _torch_amb_spectrails_tilde {
     float pregain_linear_;  // Ganho prévio convertido para linear
     int detection_mode_;    // 0=slope, 1=prominence
     float prominence_threshold_; // Para modo prominence (padrão 0.6)
+    int max_peaks_;         // Máximo de picos simultâneos (0 = ilimitado)
+    float floor_db_;        // Piso de ruído para release (-1 = usar threshold)
     
     // Inlets e outlets dinâmicos
     std::vector<t_inlet*> inlets_;
@@ -72,6 +74,14 @@ static void torch_amb_spectrails_tilde_configure_processors(t_torch_amb_spectrai
                 contorchionist::core::ap_spectrails::DetectionMode::SLOPE_BASED : 
                 contorchionist::core::ap_spectrails::DetectionMode::PROMINENCE);
             proc->set_prominence_threshold(x->prominence_threshold_);
+            proc->set_max_peaks(x->max_peaks_);
+            
+            // Converte floor_db para linear se definido
+            if (x->floor_db_ > -140.0f) {
+                proc->set_floor_threshold(std::pow(10.0f, x->floor_db_ / 20.0f));
+            } else {
+                proc->set_floor_threshold(-1.0f); // Sentinel
+            }
         }
     }
 }
@@ -336,6 +346,8 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     x->pregain_linear_ = 1.0f;
     x->detection_mode_ = 0; // 0=slope (padrão), 1=prominence
     x->prominence_threshold_ = 0.6f; // Sigmund~ usa 0.6 (PEAKTHRESHFACTOR)
+    x->max_peaks_ = 0;
+    x->floor_db_ = -150.0f; // Default to "unset" (below -140)
 
     // Parser de argumentos
     pd_utils::ArgParser parser(argc, argv, &x->x_obj);
@@ -387,6 +399,8 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     
     x->detection_mode_ = static_cast<int>(parser.get_float("mode", 0.0f)); // 0=slope, 1=prominence
     x->prominence_threshold_ = parser.get_float("prominence prom", 0.6f);
+    x->max_peaks_ = static_cast<int>(parser.get_float("max_peaks maxpeaks mp", 0.0f));
+    x->floor_db_ = parser.get_float("floordb floor", -150.0f);
     
     x->fft_size_ = static_cast<size_t>(parser.get_float("fftsize fft n", 0));
     if (x->fft_size_ == 0) {
@@ -537,6 +551,18 @@ static void torch_amb_spectrails_tilde_prominence(t_torch_amb_spectrails_tilde *
     post("torch.amb.spectrails~: prominence threshold set to %.3f", x->prominence_threshold_);
 }
 
+static void torch_amb_spectrails_tilde_max_peaks(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
+    x->max_peaks_ = std::max(0, static_cast<int>(f));
+    torch_amb_spectrails_tilde_configure_processors(x);
+    post("torch.amb.spectrails~: max_peaks set to %d", x->max_peaks_);
+}
+
+static void torch_amb_spectrails_tilde_floordb(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
+    x->floor_db_ = f;
+    torch_amb_spectrails_tilde_configure_processors(x);
+    post("torch.amb.spectrails~: floordb set to %.1f dB", x->floor_db_);
+}
+
 extern "C" void setup_torch0x2eamb0x2espectrails_tilde(void) {
     torch_amb_spectrails_tilde_class = class_new(gensym("torch.amb.spectrails~"),
                                                  reinterpret_cast<t_newmethod>(torch_amb_spectrails_tilde_new),
@@ -607,6 +633,18 @@ extern "C" void setup_torch0x2eamb0x2espectrails_tilde(void) {
     class_addmethod(torch_amb_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_amb_spectrails_tilde_prominence),
                     gensym("prominence"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_max_peaks),
+                    gensym("max_peaks"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_max_peaks),
+                    gensym("maxpeaks"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_floordb),
+                    gensym("floordb"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_floordb),
+                    gensym("floor"), A_FLOAT, 0);
     
     post("torch.amb.spectrails~: ambisonic spectral trails processor");
 }
