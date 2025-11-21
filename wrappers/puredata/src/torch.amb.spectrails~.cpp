@@ -2,6 +2,7 @@
 #include "core_ap_spectrails.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 #include <torch/torch.h>
@@ -30,6 +31,8 @@ typedef struct _torch_amb_spectrails_tilde {
     float decay_;
     float min_peak_distance_hz_;
     int overlap_factor_;
+    float pregain_db_;      // Ganho prévio em dB
+    float pregain_linear_;  // Ganho prévio convertido para linear
     
     // Inlets e outlets dinâmicos
     std::vector<t_inlet*> inlets_;
@@ -144,6 +147,11 @@ static t_int *torch_amb_spectrails_tilde_perform(t_int *w) {
                                                {static_cast<long>(num_bins)},
                                                torch::TensorOptions().dtype(torch::kFloat32))
                                    .clone();
+        
+        // Aplica pregain (apenas em magnitude, fase não muda)
+        if (x->pregain_linear_ != 1.0f) {
+            w_mag_tensor *= x->pregain_linear_;
+        }
 
         // Processa W e detecta onde houve escrita de novos picos
         auto w_envelope_before = x->processors_[0]->get_envelope_positions();
@@ -177,6 +185,11 @@ static t_int *torch_amb_spectrails_tilde_perform(t_int *w) {
                                                  {static_cast<long>(num_bins)},
                                                  torch::TensorOptions().dtype(torch::kFloat32))
                                      .clone();
+            
+            // Aplica pregain (apenas em magnitude)
+            if (x->pregain_linear_ != 1.0f) {
+                mag_tensor *= x->pregain_linear_;
+            }
 
             // CRÍTICO: Força escrita nos mesmos bins que W detectou
             if (bins_written.any().item<bool>()) {
@@ -313,6 +326,8 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     x->min_peak_distance_hz_ = 100.0f;
     x->overlap_factor_ = 4;
     x->ambi_order_ = 1;
+    x->pregain_db_ = 0.0f;
+    x->pregain_linear_ = 1.0f;
 
     // Parser de argumentos
     pd_utils::ArgParser parser(argc, argv, &x->x_obj);
@@ -358,6 +373,9 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     }
     
     x->min_peak_distance_hz_ = parser.get_float("min_peak_distance mindist mpd", 100.0f);
+    
+    x->pregain_db_ = parser.get_float("pregaindb pregain", 0.0f);
+    x->pregain_linear_ = std::pow(10.0f, x->pregain_db_ / 20.0f);
     
     x->fft_size_ = static_cast<size_t>(parser.get_float("fftsize fft n", 0));
     if (x->fft_size_ == 0) {
@@ -428,6 +446,22 @@ static void torch_amb_spectrails_tilde_threshold(t_torch_amb_spectrails_tilde *x
     torch_amb_spectrails_tilde_configure_processors(x);
 }
 
+static void torch_amb_spectrails_tilde_threshold_db(t_torch_amb_spectrails_tilde *x, t_floatarg f_db) {
+    // Converte dB para amplitude linear com máxima resolução
+    // threshold_linear = 10^(dB/20)
+    // Exemplo: -60dB → 0.001, -120dB → 0.000001
+    // Quanto mais negativo o dB, menor o threshold (mais sensível, sustenta mais)
+    // Clamp para evitar problemas de precisão numérica abaixo de -140dB
+    float db_clamped = std::max(f_db, -140.0f);
+    x->threshold_ = std::pow(10.0f, db_clamped / 20.0f);
+    
+    if (f_db < -140.0f) {
+        post("torch.amb.spectrails~: thresholddb clamped to -140dB (min) from %.1fdB", f_db);
+    }
+    
+    torch_amb_spectrails_tilde_configure_processors(x);
+}
+
 static void torch_amb_spectrails_tilde_attack(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     x->attack_ = f;
     torch_amb_spectrails_tilde_configure_processors(x);
@@ -469,6 +503,12 @@ static void torch_amb_spectrails_tilde_reset(t_torch_amb_spectrails_tilde *x) {
     }
 }
 
+static void torch_amb_spectrails_tilde_pregaindb(t_torch_amb_spectrails_tilde *x, t_floatarg f_db) {
+    x->pregain_db_ = f_db;
+    x->pregain_linear_ = std::pow(10.0f, f_db / 20.0f);
+    post("torch.amb.spectrails~: pregain set to %.1f dB (linear: %.6f)", f_db, x->pregain_linear_);
+}
+
 extern "C" void setup_torch0x2eamb0x2espectrails_tilde(void) {
     torch_amb_spectrails_tilde_class = class_new(gensym("torch.amb.spectrails~"),
                                                  reinterpret_cast<t_newmethod>(torch_amb_spectrails_tilde_new),
@@ -486,11 +526,26 @@ extern "C" void setup_torch0x2eamb0x2espectrails_tilde(void) {
                     reinterpret_cast<t_method>(torch_amb_spectrails_tilde_threshold),
                     gensym("threshold"), A_FLOAT, 0);
     class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_threshold),
+                    gensym("thresh"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_threshold_db),
+                    gensym("thresholddb"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_threshold_db),
+                    gensym("threshdb"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_amb_spectrails_tilde_attack),
                     gensym("attack"), A_FLOAT, 0);
     class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_attack),
+                    gensym("att"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_amb_spectrails_tilde_decay),
                     gensym("decay"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_decay),
+                    gensym("dec"), A_FLOAT, 0);
     class_addmethod(torch_amb_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_amb_spectrails_tilde_decaytime),
                     gensym("decaytime"), A_FLOAT, 0);
@@ -512,6 +567,12 @@ extern "C" void setup_torch0x2eamb0x2espectrails_tilde(void) {
     class_addmethod(torch_amb_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_amb_spectrails_tilde_reset),
                     gensym("reset"), A_NULL, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_pregaindb),
+                    gensym("pregaindb"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_pregaindb),
+                    gensym("pregain"), A_FLOAT, 0);
     
     post("torch.amb.spectrails~: ambisonic spectral trails processor");
 }
