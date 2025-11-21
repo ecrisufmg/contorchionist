@@ -38,6 +38,9 @@ typedef struct _torch_amb_spectrails_tilde {
     int max_peaks_;         // Máximo de picos simultâneos (0 = ilimitado)
     float floor_db_;        // Piso de ruído para release (-1 = usar threshold)
     
+    bool midi_mode_;        // Output freq as MIDI note
+    int velocity_mode_;     // 0=off (dB), 1=log, 2=linear
+    
     // Inlets e outlets dinâmicos
     std::vector<t_inlet*> inlets_;
     std::vector<t_outlet*> outlets_;
@@ -109,22 +112,38 @@ static void torch_amb_spectrails_tilde_tick(t_torch_amb_spectrails_tilde *x) {
     if (x->peak_data_ready_) {
         const auto& peaks = x->peak_data_buffer_;
         
-        // Output list: idx freq ampdb flag
-        // We output one list per peak? Or a long list?
-        // User said: "output the informations about the currently detected peaks... (number of the peak..., freq..., mag..., flag)"
-        // Usually this means a list of lists, or sequential messages.
-        // Let's output one list per peak, starting from the last one (lowest mag) to the first one (highest mag)?
-        // Or just iterate.
-        // "from the strongest magnitude value to the lowest one"
-        
-        // Since PD processes messages in order, we should output them.
-        // To make it easy to parse, maybe we should output a list: [idx freq db flag]
-        
         for (const auto& peak : peaks) {
             t_atom argv[4];
             SETFLOAT(argv+0, static_cast<t_float>(peak.rank));
-            SETFLOAT(argv+1, static_cast<t_float>(peak.freq_hz));
-            SETFLOAT(argv+2, static_cast<t_float>(peak.mag_db));
+            
+            // Freq / MIDI
+            float freq_val = peak.freq_hz;
+            if (x->midi_mode_) {
+                // MIDI = 69 + 12 * log2(freq / 440)
+                if (freq_val > 0) {
+                    freq_val = 69.0f + 12.0f * std::log2(freq_val / 440.0f);
+                } else {
+                    freq_val = -1500.0f; // Or some low value
+                }
+            }
+            SETFLOAT(argv+1, static_cast<t_float>(freq_val));
+            
+            // Mag / Velocity
+            float mag_val = peak.mag_db;
+            if (x->velocity_mode_ > 0) {
+                // Velocity
+                float velocity = 0.0f;
+                if (x->velocity_mode_ == 1) { // Log
+                    // V = 127 * 10^(dB/40)
+                    velocity = 127.0f * std::pow(10.0f, mag_val / 40.0f);
+                } else { // Linear
+                    // V = 127 * (dB + 70) / 70
+                    velocity = 127.0f * (mag_val + 70.0f) / 70.0f;
+                }
+                mag_val = velocity;
+            }
+            SETFLOAT(argv+2, static_cast<t_float>(mag_val));
+            
             SETFLOAT(argv+3, static_cast<t_float>(peak.state));
             
             outlet_list(x->info_outlet_, &s_list, 4, argv);
@@ -285,29 +304,10 @@ static t_int *torch_amb_spectrails_tilde_perform(t_int *w) {
 }
 
 static void torch_amb_spectrails_tilde_dsp(t_torch_amb_spectrails_tilde *x, t_signal **sp) {
-    post("torch.amb.spectrails~: === DSP SETUP BEGIN ===");
-    post("torch.amb.spectrails~: block_size=%d, sr=%.0f, num_channels=%d", 
-         sp[0]->s_n, sys_getsr(), x->num_channels_);
-    
     // Validação crítica
     if (!x || !sp || x->num_channels_ <= 0) {
         pd_error(x, "torch.amb.spectrails~: invalid state in dsp()");
         return;
-    }
-    
-    // Verifica se temos sinais suficientes
-    int expected_signals = x->num_channels_ * 4; // 2 in + 2 out por canal
-    post("torch.amb.spectrails~: expecting %d total signals (%d channels × 4)", 
-         expected_signals, x->num_channels_);
-    
-    // Verifica cada sinal
-    for (int i = 0; i < expected_signals && i < 32; i++) {
-        if (sp[i]) {
-            post("torch.amb.spectrails~: sp[%d] = %p (vec=%p, n=%d)", 
-                 i, sp[i], sp[i]->s_vec, sp[i]->s_n);
-        } else {
-            post("torch.amb.spectrails~: sp[%d] = NULL!", i);
-        }
     }
     
     bool block_size_changed = (x->current_block_size_ != sp[0]->s_n);
@@ -318,7 +318,6 @@ static void torch_amb_spectrails_tilde_dsp(t_torch_amb_spectrails_tilde *x, t_si
         size_t block_fft = static_cast<size_t>(sp[0]->s_n);
         if (block_fft != x->fft_size_) {
             torch_amb_spectrails_tilde_resize_processors(x, block_fft);
-            post("torch.amb.spectrails~: resized to fftsize %zu", x->fft_size_);
         }
     }
     
@@ -333,9 +332,6 @@ static void torch_amb_spectrails_tilde_dsp(t_torch_amb_spectrails_tilde *x, t_si
     std::vector<t_int> dsp_vec;
     dsp_vec.push_back(reinterpret_cast<t_int>(x));
     dsp_vec.push_back(static_cast<t_int>(sp[0]->s_n));
-    
-    post("torch.amb.spectrails~: preparing DSP chain: %d channels, %d signals", 
-         x->num_channels_, x->num_channels_ * 4);
     
     // Entradas: mag0, phase0, mag1, phase1, ...
     // sp[] indexa todos os sinais conectados aos inlets/outlets
@@ -364,26 +360,19 @@ static void torch_amb_spectrails_tilde_dsp(t_torch_amb_spectrails_tilde *x, t_si
         }
     }
     
-    post("torch.amb.spectrails~: calling dsp_addv with %zu args", dsp_vec.size());
     dsp_addv(torch_amb_spectrails_tilde_perform, static_cast<int>(dsp_vec.size()), dsp_vec.data());
-    post("torch.amb.spectrails~: === DSP SETUP COMPLETE ===");
 }
 
 static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) {
-    post("torch.amb.spectrails~: new() called with %d args", argc);
-    
     auto *x = reinterpret_cast<t_torch_amb_spectrails_tilde *>(pd_new(torch_amb_spectrails_tilde_class));
     if (!x) {
         pd_error(nullptr, "torch.amb.spectrails~: failed to allocate object");
         return nullptr;
     }
     
-    post("torch.amb.spectrails~: object allocated at %p", x);
-
     // Valores padrão
     x->current_block_size_ = 0;
     x->sampling_rate_ = sys_getsr() > 0 ? sys_getsr() : 48000.0f;
-    post("torch.amb.spectrails~: sample rate = %.0f", x->sampling_rate_);
     x->threshold_ = 0.01f;
     x->attack_ = 0.7f;
     x->decay_ = 0.999f;
@@ -419,19 +408,14 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     
     // TEMPORÁRIO: Força ordem 1 para debugging
     if (x->ambi_order_ > 1) {
-        post("torch.amb.spectrails~: WARNING - forcing order=1 for debugging");
         x->ambi_order_ = 1;
     }
     
     x->num_channels_ = (x->ambi_order_ + 1) * (x->ambi_order_ + 1); // B = (N+1)^2
-    post("torch.amb.spectrails~: order=%d, num_channels=%d", x->ambi_order_, x->num_channels_);
     
     x->threshold_ = parser.get_float("threshold thresh", 0.01f);
     x->attack_ = parser.get_float("attack att", 0.7f);
     x->overlap_factor_ = static_cast<int>(parser.get_float("overlap of", 4));
-    
-    post("torch.amb.spectrails~: params - thresh=%.3f, attack=%.3f, overlap=%d", 
-         x->threshold_, x->attack_, x->overlap_factor_);
     
     float decaytime_sec = parser.get_float("decaytime decayt dtime", -1.0f);
     if (decaytime_sec > 0.0f) {
@@ -451,6 +435,28 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     x->max_peaks_ = static_cast<int>(parser.get_float("max_peaks maxpeaks mp", 0.0f));
     x->floor_db_ = parser.get_float("floordb floor", -150.0f);
     
+    x->midi_mode_ = parser.has_flag("midi m");
+    
+    x->velocity_mode_ = 0;
+    if (parser.has_flag("velocity vel v")) {
+        std::string vel_mode = parser.get_string("velocity vel v", "log");
+        if (vel_mode == "linear" || vel_mode == "lin") {
+            x->velocity_mode_ = 2;
+        } else {
+            x->velocity_mode_ = 1;
+        }
+    }
+    
+    float gain_db = parser.get_float("gaindb gain g", 0.0f);
+    float gain_lin = std::pow(10.0f, gain_db / 20.0f);
+    
+    bool limiter_enable = parser.has_flag("limiter lim l");
+    float limiter_thresh_db = 0.0f;
+    if (limiter_enable) {
+        limiter_thresh_db = parser.get_float("limiter lim l", 0.0f);
+    }
+    float limiter_thresh_lin = std::pow(10.0f, limiter_thresh_db / 20.0f);
+    
     x->fft_size_ = static_cast<size_t>(parser.get_float("fftsize fft n", 0));
     if (x->fft_size_ == 0) {
         x->fft_size_ = 1024;
@@ -465,12 +471,21 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     x->device_ = final_device;
     
     // Cria processadores para cada canal
-    post("torch.amb.spectrails~: creating %d processors...", x->num_channels_);
     try {
         for (int ch = 0; ch < x->num_channels_; ++ch) {
             x->processors_.push_back(std::make_unique<Processor>(x->num_bins_, x->device_));
         }
-        post("torch.amb.spectrails~: processors created successfully");
+        
+        // Apply initial gain and limiter settings
+        for (auto& proc : x->processors_) {
+            if (proc) {
+                proc->set_output_gain(gain_lin);
+                if (limiter_enable) {
+                    proc->set_limiter(true, limiter_thresh_lin);
+                }
+            }
+        }
+        
         torch_amb_spectrails_tilde_configure_processors(x);
     } catch (const std::exception &e) {
         pd_error(x, "torch.amb.spectrails~: failed to create processors: %s", e.what());
@@ -482,8 +497,6 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     // Total de inlets a criar: (num_channels * 2) - 1
     // Ordem: phase0, mag1, phase1, mag2, phase2, ...
     
-    post("torch.amb.spectrails~: creating %d inlets...", (x->num_channels_ * 2) - 1);
-    
     // Primeiro inlet adicional: phase0
     x->inlets_.push_back(inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_signal, &s_signal));
     
@@ -492,8 +505,6 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
         x->inlets_.push_back(inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_signal, &s_signal)); // mag
         x->inlets_.push_back(inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_signal, &s_signal)); // phase
     }
-    
-    post("torch.amb.spectrails~: inlets created, creating %d outlets...", x->num_channels_ * 2);
     
     // Cria outlets: out_mag0, out_phase0, out_mag1, out_phase1, ...
     for (int ch = 0; ch < x->num_channels_; ++ch) {
@@ -585,7 +596,6 @@ static void torch_amb_spectrails_tilde_reset(t_torch_amb_spectrails_tilde *x) {
 static void torch_amb_spectrails_tilde_pregaindb(t_torch_amb_spectrails_tilde *x, t_floatarg f_db) {
     x->pregain_db_ = f_db;
     x->pregain_linear_ = std::pow(10.0f, f_db / 20.0f);
-    post("torch.amb.spectrails~: pregain set to %.1f dB (linear: %.6f)", f_db, x->pregain_linear_);
 }
 
 static void torch_amb_spectrails_tilde_mode(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
@@ -593,7 +603,6 @@ static void torch_amb_spectrails_tilde_mode(t_torch_amb_spectrails_tilde *x, t_f
     if (mode == 0 || mode == 1) {
         x->detection_mode_ = mode;
         torch_amb_spectrails_tilde_configure_processors(x);
-        post("torch.amb.spectrails~: mode set to %s", mode == 0 ? "slope" : "prominence");
     } else {
         pd_error(x, "torch.amb.spectrails~: mode must be 0 (slope) or 1 (prominence)");
     }
@@ -602,19 +611,63 @@ static void torch_amb_spectrails_tilde_mode(t_torch_amb_spectrails_tilde *x, t_f
 static void torch_amb_spectrails_tilde_prominence(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     x->prominence_threshold_ = std::clamp(f, 0.0f, 1.0f);
     torch_amb_spectrails_tilde_configure_processors(x);
-    post("torch.amb.spectrails~: prominence threshold set to %.3f", x->prominence_threshold_);
 }
 
 static void torch_amb_spectrails_tilde_max_peaks(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     x->max_peaks_ = std::max(0, static_cast<int>(f));
     torch_amb_spectrails_tilde_configure_processors(x);
-    post("torch.amb.spectrails~: max_peaks set to %d", x->max_peaks_);
 }
 
 static void torch_amb_spectrails_tilde_floordb(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     x->floor_db_ = f;
     torch_amb_spectrails_tilde_configure_processors(x);
-    post("torch.amb.spectrails~: floordb set to %.1f dB", x->floor_db_);
+}
+
+static void torch_amb_spectrails_tilde_gaindb(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
+    float gain_lin = std::pow(10.0f, f / 20.0f);
+    for (auto& proc : x->processors_) {
+        if (proc) proc->set_output_gain(gain_lin);
+    }
+}
+
+static void torch_amb_spectrails_tilde_limiter(t_torch_amb_spectrails_tilde *x, t_symbol *s, int argc, t_atom *argv) {
+    bool enable = true;
+    float threshold_db = 0.0f;
+    
+    if (argc > 0) {
+        threshold_db = atom_getfloat(argv);
+    }
+    
+    float threshold_lin = std::pow(10.0f, threshold_db / 20.0f);
+    
+    for (auto& proc : x->processors_) {
+        if (proc) proc->set_limiter(enable, threshold_lin);
+    }
+}
+
+static void torch_amb_spectrails_tilde_midi(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
+    x->midi_mode_ = (f != 0.0f);
+}
+
+static void torch_amb_spectrails_tilde_velocity(t_torch_amb_spectrails_tilde *x, t_symbol *s, int argc, t_atom *argv) {
+    if (argc == 0) {
+        x->velocity_mode_ = 1; // Default log
+        return;
+    }
+    
+    if (argv[0].a_type == A_SYMBOL) {
+        t_symbol* sym = atom_getsymbol(argv);
+        if (sym == gensym("linear") || sym == gensym("lin")) {
+            x->velocity_mode_ = 2;
+        } else if (sym == gensym("log") || sym == gensym("logarithmic")) {
+            x->velocity_mode_ = 1;
+        } else if (sym == gensym("off") || sym == gensym("none")) {
+            x->velocity_mode_ = 0;
+        }
+    } else {
+        float val = atom_getfloat(argv);
+        x->velocity_mode_ = (val != 0.0f) ? 1 : 0;
+    }
 }
 
 extern "C" void setup_torch0x2eamb0x2espectrails_tilde(void) {
@@ -699,6 +752,24 @@ extern "C" void setup_torch0x2eamb0x2espectrails_tilde(void) {
     class_addmethod(torch_amb_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_amb_spectrails_tilde_floordb),
                     gensym("floor"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_gaindb),
+                    gensym("gaindb"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_gaindb),
+                    gensym("gain"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_limiter),
+                    gensym("limiter"), A_GIMME, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_midi),
+                    gensym("midi"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_velocity),
+                    gensym("velocity"), A_GIMME, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_velocity),
+                    gensym("vel"), A_GIMME, 0);
     
     post("torch.amb.spectrails~: ambisonic spectral trails processor");
 }
