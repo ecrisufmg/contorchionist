@@ -33,6 +33,8 @@ typedef struct _torch_amb_spectrails_tilde {
     int overlap_factor_;
     float pregain_db_;      // Ganho prévio em dB
     float pregain_linear_;  // Ganho prévio convertido para linear
+    int detection_mode_;    // 0=slope, 1=prominence
+    float prominence_threshold_; // Para modo prominence (padrão 0.6)
     
     // Inlets e outlets dinâmicos
     std::vector<t_inlet*> inlets_;
@@ -66,6 +68,10 @@ static void torch_amb_spectrails_tilde_configure_processors(t_torch_amb_spectrai
             proc->set_attack(x->attack_);
             proc->set_decay(x->decay_);
             proc->set_min_peak_distance_hz(x->min_peak_distance_hz_, x->sampling_rate_);
+            proc->set_detection_mode(x->detection_mode_ == 0 ? 
+                contorchionist::core::ap_spectrails::DetectionMode::SLOPE_BASED : 
+                contorchionist::core::ap_spectrails::DetectionMode::PROMINENCE);
+            proc->set_prominence_threshold(x->prominence_threshold_);
         }
     }
 }
@@ -328,6 +334,8 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     x->ambi_order_ = 1;
     x->pregain_db_ = 0.0f;
     x->pregain_linear_ = 1.0f;
+    x->detection_mode_ = 0; // 0=slope (padrão), 1=prominence
+    x->prominence_threshold_ = 0.6f; // Sigmund~ usa 0.6 (PEAKTHRESHFACTOR)
 
     // Parser de argumentos
     pd_utils::ArgParser parser(argc, argv, &x->x_obj);
@@ -376,6 +384,9 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     
     x->pregain_db_ = parser.get_float("pregaindb pregain", 0.0f);
     x->pregain_linear_ = std::pow(10.0f, x->pregain_db_ / 20.0f);
+    
+    x->detection_mode_ = static_cast<int>(parser.get_float("mode", 0.0f)); // 0=slope, 1=prominence
+    x->prominence_threshold_ = parser.get_float("prominence prom", 0.6f);
     
     x->fft_size_ = static_cast<size_t>(parser.get_float("fftsize fft n", 0));
     if (x->fft_size_ == 0) {
@@ -509,6 +520,23 @@ static void torch_amb_spectrails_tilde_pregaindb(t_torch_amb_spectrails_tilde *x
     post("torch.amb.spectrails~: pregain set to %.1f dB (linear: %.6f)", f_db, x->pregain_linear_);
 }
 
+static void torch_amb_spectrails_tilde_mode(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
+    int mode = static_cast<int>(f);
+    if (mode == 0 || mode == 1) {
+        x->detection_mode_ = mode;
+        torch_amb_spectrails_tilde_configure_processors(x);
+        post("torch.amb.spectrails~: mode set to %s", mode == 0 ? "slope" : "prominence");
+    } else {
+        pd_error(x, "torch.amb.spectrails~: mode must be 0 (slope) or 1 (prominence)");
+    }
+}
+
+static void torch_amb_spectrails_tilde_prominence(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
+    x->prominence_threshold_ = std::clamp(f, 0.0f, 1.0f);
+    torch_amb_spectrails_tilde_configure_processors(x);
+    post("torch.amb.spectrails~: prominence threshold set to %.3f", x->prominence_threshold_);
+}
+
 extern "C" void setup_torch0x2eamb0x2espectrails_tilde(void) {
     torch_amb_spectrails_tilde_class = class_new(gensym("torch.amb.spectrails~"),
                                                  reinterpret_cast<t_newmethod>(torch_amb_spectrails_tilde_new),
@@ -573,6 +601,12 @@ extern "C" void setup_torch0x2eamb0x2espectrails_tilde(void) {
     class_addmethod(torch_amb_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_amb_spectrails_tilde_pregaindb),
                     gensym("pregain"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_mode),
+                    gensym("mode"), A_FLOAT, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_prominence),
+                    gensym("prominence"), A_FLOAT, 0);
     
     post("torch.amb.spectrails~: ambisonic spectral trails processor");
 }
