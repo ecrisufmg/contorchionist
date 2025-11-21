@@ -67,6 +67,9 @@ private:
     bool use_parabolic_interp_;
     int max_peaks_;
     T floor_threshold_;
+    T output_gain_;
+    bool use_limiter_;
+    T limiter_threshold_;
     
     std::vector<PeakInfo> latest_peaks_;
 
@@ -99,7 +102,10 @@ public:
           prominence_threshold_(static_cast<T>(0.6)),
           use_parabolic_interp_(true),
           max_peaks_(0),
-          floor_threshold_(static_cast<T>(-1.0)) {
+          floor_threshold_(static_cast<T>(-1.0)),
+          output_gain_(static_cast<T>(1.0)),
+          use_limiter_(false),
+          limiter_threshold_(static_cast<T>(1.0)) {
         if (num_bins_ == 0) {
             throw std::invalid_argument("SpectralTrailsProcessor: num_bins must be > 0");
         }
@@ -140,6 +146,11 @@ public:
     void set_parabolic_interpolation(bool enable) { use_parabolic_interp_ = enable; }
     void set_max_peaks(int max_peaks) { max_peaks_ = max_peaks; }
     void set_floor_threshold(T value) { floor_threshold_ = value; }
+    void set_output_gain(T value) { output_gain_ = value; }
+    void set_limiter(bool enable, T threshold = static_cast<T>(1.0)) {
+        use_limiter_ = enable;
+        limiter_threshold_ = threshold;
+    }
     
     const std::vector<PeakInfo>& get_latest_peaks() const { return latest_peaks_; }
 
@@ -463,8 +474,34 @@ public:
 
         // Store current magnitude for next frame
         previous_magnitude_ = mag.clone();
+
+        // Force DC and Nyquist to zero
+        auto out_mag = output_magnitude_.clone();
+        auto out_phase = output_phase_.clone();
         
+        if (num_bins_ > 0) {
+            out_mag[0] = 0.0f;
+            out_phase[0] = 0.0f;
+        }
+        if (num_bins_ > 1) {
+            out_mag[static_cast<long>(num_bins_) - 1] = 0.0f;
+            out_phase[static_cast<long>(num_bins_) - 1] = 0.0f;
+        }
+
+        // Apply output gain
+        if (output_gain_ != static_cast<T>(1.0)) {
+            out_mag *= output_gain_;
+        }
+
+        // Apply limiter
+        if (use_limiter_) {
+            out_mag = torch::clamp(out_mag, static_cast<T>(0.0), limiter_threshold_);
+        }
+
         // Collect active peaks (new and sustained)
+        // We use the processed out_mag (with gain and limiter) for reporting
+        auto final_mag_acc = out_mag.template accessor<float, 1>();
+
         for (long j = 0; j < static_cast<long>(num_bins_); ++j) {
             if (last_peak_check[j] > 0) {
                 // Check if it's a new peak
@@ -477,7 +514,7 @@ public:
                 }
                 
                 float freq = static_cast<float>(j) * sample_rate_ / fft_size_;
-                float mag_lin = out_mag_check[j];
+                float mag_lin = final_mag_acc[j]; // Use final magnitude
                 float mag_db = 20.0f * std::log10(std::max(mag_lin, 1e-10f));
                 
                 latest_peaks_.push_back({0, freq, mag_db, is_new ? 1 : 0, mag_lin});
@@ -493,19 +530,6 @@ public:
         // Assign ranks
         for (size_t i = 0; i < latest_peaks_.size(); ++i) {
             latest_peaks_[i].rank = static_cast<int>(i);
-        }
-
-        // Force DC and Nyquist to zero
-        auto out_mag = output_magnitude_.clone();
-        auto out_phase = output_phase_.clone();
-        
-        if (num_bins_ > 0) {
-            out_mag[0] = 0.0f;
-            out_phase[0] = 0.0f;
-        }
-        if (num_bins_ > 1) {
-            out_mag[static_cast<long>(num_bins_) - 1] = 0.0f;
-            out_phase[static_cast<long>(num_bins_) - 1] = 0.0f;
         }
 
         return {out_mag, out_phase};
