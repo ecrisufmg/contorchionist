@@ -41,6 +41,12 @@ typedef struct _torch_amb_spectrails_tilde {
     // Inlets e outlets dinâmicos
     std::vector<t_inlet*> inlets_;
     std::vector<t_outlet*> outlets_;
+    t_outlet *info_outlet_; // Outlet para dados de controle
+    t_clock *info_clock_;   // Clock para enviar dados de controle
+    
+    // Buffer para dados de picos (thread-safe copy)
+    std::vector<contorchionist::core::ap_spectrails::PeakInfo> peak_data_buffer_;
+    bool peak_data_ready_;
     
     // Estado do ambiente Pd
     int current_block_size_;
@@ -97,6 +103,35 @@ static void torch_amb_spectrails_tilde_resize_processors(t_torch_amb_spectrails_
         }
     }
     torch_amb_spectrails_tilde_configure_processors(x);
+}
+
+static void torch_amb_spectrails_tilde_tick(t_torch_amb_spectrails_tilde *x) {
+    if (x->peak_data_ready_) {
+        const auto& peaks = x->peak_data_buffer_;
+        
+        // Output list: idx freq ampdb flag
+        // We output one list per peak? Or a long list?
+        // User said: "output the informations about the currently detected peaks... (number of the peak..., freq..., mag..., flag)"
+        // Usually this means a list of lists, or sequential messages.
+        // Let's output one list per peak, starting from the last one (lowest mag) to the first one (highest mag)?
+        // Or just iterate.
+        // "from the strongest magnitude value to the lowest one"
+        
+        // Since PD processes messages in order, we should output them.
+        // To make it easy to parse, maybe we should output a list: [idx freq db flag]
+        
+        for (const auto& peak : peaks) {
+            t_atom argv[4];
+            SETFLOAT(argv+0, static_cast<t_float>(peak.rank));
+            SETFLOAT(argv+1, static_cast<t_float>(peak.freq_hz));
+            SETFLOAT(argv+2, static_cast<t_float>(peak.mag_db));
+            SETFLOAT(argv+3, static_cast<t_float>(peak.state));
+            
+            outlet_list(x->info_outlet_, &s_list, 4, argv);
+        }
+        
+        x->peak_data_ready_ = false;
+    }
 }
 
 static t_int *torch_amb_spectrails_tilde_perform(t_int *w) {
@@ -228,6 +263,19 @@ static t_int *torch_amb_spectrails_tilde_perform(t_int *w) {
                 out_phases[ch][i] = 0.0f;
             }
         }
+        
+        // Update peak info for control output
+        // We only take info from channel 0 (W) as it drives the detection
+        if (x->processors_[0]) {
+            // Copy data to buffer (simple copy, assuming no race condition critical enough to crash)
+            // In a strict real-time environment, we might want a lock-free queue, 
+            // but for control data visualization, this is usually acceptable in PD externals
+            // if the data size is small.
+            x->peak_data_buffer_ = x->processors_[0]->get_latest_peaks();
+            x->peak_data_ready_ = true;
+            clock_delay(x->info_clock_, 0);
+        }
+
     } catch (const std::exception &e) {
         pd_error(x, "torch.amb.spectrails~: %s", e.what());
         zero_outputs();
@@ -348,6 +396,7 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     x->prominence_threshold_ = 0.6f; // Sigmund~ usa 0.6 (PEAKTHRESHFACTOR)
     x->max_peaks_ = 0;
     x->floor_db_ = -150.0f; // Default to "unset" (below -140)
+    x->peak_data_ready_ = false;
 
     // Parser de argumentos
     pd_utils::ArgParser parser(argc, argv, &x->x_obj);
@@ -451,6 +500,10 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
         x->outlets_.push_back(outlet_new(&x->x_obj, &s_signal));
         x->outlets_.push_back(outlet_new(&x->x_obj, &s_signal));
     }
+    
+    // Extra outlet for control data (rightmost)
+    x->info_outlet_ = outlet_new(&x->x_obj, &s_list);
+    x->info_clock_ = clock_new(x, (t_method)torch_amb_spectrails_tilde_tick);
 
     post("torch.amb.spectrails~: order=%d channels=%d (%.1fHz thresh, %.3f att, %.4f dec, overlap=%d) [%s] - READY", 
          x->ambi_order_, x->num_channels_, x->min_peak_distance_hz_, x->attack_, x->decay_, x->overlap_factor_,
@@ -460,6 +513,7 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
 }
 
 static void torch_amb_spectrails_tilde_free(t_torch_amb_spectrails_tilde *x) {
+    if (x->info_clock_) clock_free(x->info_clock_);
     for (auto& inlet : x->inlets_) {
         if (inlet) inlet_free(inlet);
     }

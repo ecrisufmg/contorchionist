@@ -11,6 +11,14 @@ namespace contorchionist {
 namespace core {
 namespace ap_spectrails {
 
+struct PeakInfo {
+    int rank;
+    float freq_hz;
+    float mag_db;
+    int state; // 1: new, 0: sustained, -1: decayed
+    float mag_lin; // Used for sorting
+};
+
 /**
  * @brief Detection mode for spectral peaks
  */
@@ -59,6 +67,8 @@ private:
     bool use_parabolic_interp_;
     int max_peaks_;
     T floor_threshold_;
+    
+    std::vector<PeakInfo> latest_peaks_;
 
     void allocate_memory() {
         auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
@@ -130,6 +140,8 @@ public:
     void set_parabolic_interpolation(bool enable) { use_parabolic_interp_ = enable; }
     void set_max_peaks(int max_peaks) { max_peaks_ = max_peaks; }
     void set_floor_threshold(T value) { floor_threshold_ = value; }
+    
+    const std::vector<PeakInfo>& get_latest_peaks() const { return latest_peaks_; }
 
     // Get/set envelope positions for multi-channel synchronization
     torch::Tensor get_envelope_positions() const {
@@ -182,6 +194,9 @@ public:
 
         auto mag = magnitude_input.to(device_, torch::kFloat32);
         auto phase = phase_input.to(device_, torch::kFloat32);
+        
+        latest_peaks_.clear();
+        std::vector<int> new_peak_bins;
 
         // 1. Update envelope positions (move towards 1.0 using attack rate)
         envelope_position_ = torch::clamp(envelope_position_ + attack_, 0.0f, 1.0f);
@@ -204,14 +219,21 @@ public:
         auto out_mag_check = output_magnitude_.template accessor<float, 1>();
         auto last_peak_check = last_written_peak_bin_.template accessor<float, 1>();
         
-        // Determine release threshold: use floor_threshold_ if set, otherwise threshold_ * 0.1
+        // Determine release threshold: use floor_threshold_ if set.
+        // Otherwise default to threshold - 20dB (0.1 * threshold).
         float release_level = (floor_threshold_ > static_cast<T>(0.0)) ? floor_threshold_ : (threshold_ * static_cast<T>(0.1));
         int active_peaks = 0;
 
         for (long j = 0; j < static_cast<long>(num_bins_); ++j) {
             if (last_peak_check[j] > 0) {
                 if (out_mag_check[j] < release_level) {
-                    last_peak_check[j] = 0.0f; // Clear the marker when magnitude has decayed
+                    // Peak decayed
+                    float freq = static_cast<float>(j) * sample_rate_ / fft_size_;
+                    float mag_lin = out_mag_check[j];
+                    float mag_db = 20.0f * std::log10(std::max(mag_lin, 1e-10f));
+                    latest_peaks_.push_back({0, freq, mag_db, -1, mag_lin});
+                    
+                    last_peak_check[j] = 0.0f; // Clear the marker
                 } else {
                     active_peaks++;
                 }
@@ -426,6 +448,10 @@ public:
                         last_peak_bin_acc[i] = static_cast<float>(i);
                         peak_acc[i] = 0.0f;
                     }
+                    
+                    // Record new peak bin
+                    new_peak_bins.push_back(i);
+                    active_peaks++;
                 }
             }
 
@@ -437,6 +463,37 @@ public:
 
         // Store current magnitude for next frame
         previous_magnitude_ = mag.clone();
+        
+        // Collect active peaks (new and sustained)
+        for (long j = 0; j < static_cast<long>(num_bins_); ++j) {
+            if (last_peak_check[j] > 0) {
+                // Check if it's a new peak
+                bool is_new = false;
+                for (int new_bin : new_peak_bins) {
+                    if (new_bin == j) {
+                        is_new = true;
+                        break;
+                    }
+                }
+                
+                float freq = static_cast<float>(j) * sample_rate_ / fft_size_;
+                float mag_lin = out_mag_check[j];
+                float mag_db = 20.0f * std::log10(std::max(mag_lin, 1e-10f));
+                
+                latest_peaks_.push_back({0, freq, mag_db, is_new ? 1 : 0, mag_lin});
+            }
+        }
+        
+        // Sort peaks by magnitude (descending)
+        std::sort(latest_peaks_.begin(), latest_peaks_.end(), 
+            [](const PeakInfo& a, const PeakInfo& b) {
+                return a.mag_lin > b.mag_lin;
+            });
+            
+        // Assign ranks
+        for (size_t i = 0; i < latest_peaks_.size(); ++i) {
+            latest_peaks_[i].rank = static_cast<int>(i);
+        }
 
         // Force DC and Nyquist to zero
         auto out_mag = output_magnitude_.clone();
