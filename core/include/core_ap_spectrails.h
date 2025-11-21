@@ -12,6 +12,14 @@ namespace core {
 namespace ap_spectrails {
 
 /**
+ * @brief Detection mode for spectral peaks
+ */
+enum class DetectionMode {
+    SLOPE_BASED = 0,    // Original: negative slope after peak
+    PROMINENCE = 1      // New: relative threshold + parabolic interpolation
+};
+
+/**
  * @brief Spectral trails processor with peak detection and slope-based triggering.
  *
  * This processor:
@@ -35,7 +43,10 @@ public:
           decay_(static_cast<T>(0.999)),
           min_peak_distance_bins_(static_cast<T>(2.0)),
           sample_rate_(static_cast<T>(44100.0)),
-          fft_size_(static_cast<T>((num_bins - 1) * 2)) {
+          fft_size_(static_cast<T>((num_bins - 1) * 2)),
+          detection_mode_(DetectionMode::SLOPE_BASED),
+          prominence_threshold_(static_cast<T>(0.6)),
+          use_parabolic_interp_(true) {
         if (num_bins_ == 0) {
             throw std::invalid_argument("SpectralTrailsProcessor: num_bins must be > 0");
         }
@@ -71,6 +82,9 @@ public:
         sample_rate_ = sample_rate;
         min_peak_distance_bins_ = (value * fft_size_) / sample_rate_;
     }
+    void set_detection_mode(DetectionMode mode) { detection_mode_ = mode; }
+    void set_prominence_threshold(T value) { prominence_threshold_ = std::clamp(value, static_cast<T>(0), static_cast<T>(1)); }
+    void set_parabolic_interpolation(bool enable) { use_parabolic_interp_ = enable; }
 
     // Get/set envelope positions for multi-channel synchronization
     torch::Tensor get_envelope_positions() const {
@@ -171,20 +185,59 @@ public:
             // Check if this is a local peak
             bool is_peak = (curr_mag > left_mag) && (curr_mag > right_mag) && (curr_mag > threshold_);
 
-            // Update peak tracker
-            if (curr_mag > peak_acc[i]) {
-                peak_acc[i] = curr_mag;
+            bool should_trigger = false;
+            
+            if (detection_mode_ == DetectionMode::PROMINENCE) {
+                // Prominence mode: relative threshold + parabolic interpolation
+                // Compare with bins at distance ±2 (like sigmund~)
+                float left2_mag = (i >= 2) ? mag_acc[i - 2] : 0.0f;
+                float right2_mag = (i < static_cast<long>(num_bins_) - 2) ? mag_acc[i + 2] : 0.0f;
+                
+                // Relative threshold: peak must exceed prominence_threshold * (neighbor peaks)
+                float neighbor_power = left2_mag + right2_mag;
+                bool prominent_peak = is_peak && (curr_mag > prominence_threshold_ * neighbor_power);
+                
+                // Check envelope state
+                bool envelope_complete = env_acc[i] > 0.95f;
+                bool significant_increase = curr_mag > (out_mag_acc[i] * 1.1f);
+                
+                should_trigger = prominent_peak && envelope_complete && significant_increase;
+                
+                // Parabolic interpolation for refined frequency (if enabled)
+                if (should_trigger && use_parabolic_interp_) {
+                    // Calculate detune using quadratic interpolation
+                    // detune = ((right² - left²)) / (2 * (2*center - left - right))
+                    float left_sq = left_mag * left_mag;
+                    float right_sq = right_mag * right_mag;
+                    float windpower = (left_mag + right_mag - 2.0f * curr_mag);
+                    
+                    if (std::abs(windpower) > 1e-10f) {
+                        float detune = (right_sq - left_sq) / (2.0f * windpower);
+                        detune = std::clamp(detune, -0.5f, 0.5f);
+                        // Store detune for potential future use (frequency refinement)
+                        // For now, we just detect at bin centers
+                    }
+                }
+            } else {
+                // Original slope-based mode
+                // Update peak tracker
+                if (curr_mag > peak_acc[i]) {
+                    peak_acc[i] = curr_mag;
+                }
+
+                // Detect negative slope (started decaying from peak)
+                bool negative_slope = curr_mag < prev_mag;
+                bool was_at_peak = prev_mag >= (peak_acc[i] * 0.95f); // Within 5% of tracked peak
+
+                // Trigger write: local peak, negative slope, was near maximum
+                // CRITICAL: Only trigger if envelope is nearly complete (>0.95) to avoid re-triggering during attack
+                bool envelope_complete = env_acc[i] > 0.95f;
+                bool significant_increase = curr_mag > (out_mag_acc[i] * 1.1f);
+                
+                should_trigger = is_peak && negative_slope && was_at_peak && curr_mag > threshold_ && envelope_complete && significant_increase;
             }
 
-            // Detect negative slope (started decaying from peak)
-            bool negative_slope = curr_mag < prev_mag;
-            bool was_at_peak = prev_mag >= (peak_acc[i] * 0.95f); // Within 5% of tracked peak
-
-            // Trigger write: local peak, negative slope, was near maximum
-            // CRITICAL: Only trigger if envelope is nearly complete (>0.95) to avoid re-triggering during attack
-            bool envelope_complete = env_acc[i] > 0.95f;
-            
-            if (is_peak && negative_slope && was_at_peak && curr_mag > threshold_ && envelope_complete) {
+            if (should_trigger) {
                 // Check minimum distance from last written peak
                 bool far_enough = true;
                 for (long j = 0; j < static_cast<long>(num_bins_); ++j) {
@@ -194,10 +247,7 @@ public:
                     }
                 }
 
-                // Additional check: only trigger if new peak is significantly higher than current output
-                bool significant_increase = curr_mag > (out_mag_acc[i] * 1.1f);
-
-                if (far_enough && significant_increase) {
+                if (far_enough) {
                     // Start new envelope: save current position as start, set new target
                     start_acc[i] = out_mag_acc[i];
                     target_acc[i] = curr_mag;
@@ -273,6 +323,9 @@ private:
     T min_peak_distance_bins_;
     T sample_rate_;
     T fft_size_;
+    DetectionMode detection_mode_;
+    T prominence_threshold_;
+    bool use_parabolic_interp_;
 };
 
 }  // namespace ap_spectrails
