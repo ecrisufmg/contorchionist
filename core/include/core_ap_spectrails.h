@@ -84,6 +84,34 @@ public:
         envelope_position_ = envelope.to(device_, torch::kFloat32);
     }
 
+    // Force write specific bins (for ambisonic sync - triggered by W channel)
+    void force_write_bins(const torch::Tensor& bins_to_write,
+                         const torch::Tensor& magnitude_input,
+                         const torch::Tensor& phase_input) {
+        auto bins_acc = bins_to_write.template accessor<float, 1>();
+        auto mag_acc = magnitude_input.template accessor<float, 1>();
+        auto phase_acc = phase_input.template accessor<float, 1>();
+        auto start_mag_acc = start_magnitude_.template accessor<float, 1>();
+        auto target_mag_acc = target_magnitude_.template accessor<float, 1>();
+        auto start_phase_acc = start_phase_.template accessor<float, 1>();
+        auto target_phase_acc = target_phase_.template accessor<float, 1>();
+        auto out_mag_acc = output_magnitude_.template accessor<float, 1>();
+        auto out_phase_acc = output_phase_.template accessor<float, 1>();
+        auto env_acc = envelope_position_.template accessor<float, 1>();
+        auto peak_acc = peak_magnitude_.template accessor<float, 1>();
+
+        for (long i = 0; i < bins_to_write.size(0); ++i) {
+            if (bins_acc[i] > 0.5f) { // bin marked for write
+                start_mag_acc[i] = out_mag_acc[i];
+                target_mag_acc[i] = mag_acc[i];
+                start_phase_acc[i] = out_phase_acc[i];
+                target_phase_acc[i] = phase_acc[i];
+                env_acc[i] = 0.0f; // Reset envelope
+                peak_acc[i] = 0.0f; // Reset peak tracker
+            }
+        }
+    }
+
     std::vector<torch::Tensor> process_frame(const torch::Tensor& magnitude_input,
                                              const torch::Tensor& phase_input) {
         if (magnitude_input.size(0) != static_cast<long>(num_bins_)) {
