@@ -57,6 +57,8 @@ private:
     DetectionMode detection_mode_;
     T prominence_threshold_;
     bool use_parabolic_interp_;
+    int max_peaks_;
+    T floor_threshold_;
 
     void allocate_memory() {
         auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(device_);
@@ -85,7 +87,9 @@ public:
           fft_size_(static_cast<T>((num_bins - 1) * 2)),
           detection_mode_(DetectionMode::SLOPE_BASED),
           prominence_threshold_(static_cast<T>(0.6)),
-          use_parabolic_interp_(true) {
+          use_parabolic_interp_(true),
+          max_peaks_(0),
+          floor_threshold_(static_cast<T>(-1.0)) {
         if (num_bins_ == 0) {
             throw std::invalid_argument("SpectralTrailsProcessor: num_bins must be > 0");
         }
@@ -124,6 +128,8 @@ public:
     void set_detection_mode(DetectionMode mode) { detection_mode_ = mode; }
     void set_prominence_threshold(T value) { prominence_threshold_ = std::clamp(value, static_cast<T>(0), static_cast<T>(1)); }
     void set_parabolic_interpolation(bool enable) { use_parabolic_interp_ = enable; }
+    void set_max_peaks(int max_peaks) { max_peaks_ = max_peaks; }
+    void set_floor_threshold(T value) { floor_threshold_ = value; }
 
     // Get/set envelope positions for multi-channel synchronization
     torch::Tensor get_envelope_positions() const {
@@ -197,9 +203,18 @@ public:
         // 4. Age out old peak markers (clear peaks that have decayed away)
         auto out_mag_check = output_magnitude_.template accessor<float, 1>();
         auto last_peak_check = last_written_peak_bin_.template accessor<float, 1>();
+        
+        // Determine release threshold: use floor_threshold_ if set, otherwise threshold_ * 0.1
+        float release_level = (floor_threshold_ > static_cast<T>(0.0)) ? floor_threshold_ : (threshold_ * static_cast<T>(0.1));
+        int active_peaks = 0;
+
         for (long j = 0; j < static_cast<long>(num_bins_); ++j) {
-            if (last_peak_check[j] > 0 && out_mag_check[j] < threshold_ * 0.1f) {
-                last_peak_check[j] = 0.0f; // Clear the marker when magnitude has decayed
+            if (last_peak_check[j] > 0) {
+                if (out_mag_check[j] < release_level) {
+                    last_peak_check[j] = 0.0f; // Clear the marker when magnitude has decayed
+                } else {
+                    active_peaks++;
+                }
             }
         }
 
@@ -342,6 +357,13 @@ public:
                 should_trigger = is_peak && negative_slope && was_at_peak && 
                                 interpolated_mag > threshold_ && envelope_complete && 
                                 significant_increase;
+            }
+
+            if (should_trigger) {
+                // Check max peaks limit
+                if (max_peaks_ > 0 && active_peaks >= max_peaks_) {
+                    should_trigger = false;
+                }
             }
 
             if (should_trigger) {
