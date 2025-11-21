@@ -438,15 +438,15 @@ file(WRITE "${CMAKE_BINARY_DIR}/install_puredata.cmake"
 "message(STATUS \"Running install-puredata script...\")\n"
 "if(EXISTS \"${PD_USER_PDDIR}\")\n"
 "  message(STATUS \"Found target Pd externals dir: ${PD_USER_PDDIR} - copying distribution...\")\n"
-"  file(COPY \"${PD_OUTPUT_DIR}/\" DESTINATION \"${PD_USER_PDDIR}/conTorchinistSN\")\n"
-"  message(STATUS \"Copied ${PD_OUTPUT_DIR} to ${PD_USER_PDDIR}/conTorchinistSN\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/\" DESTINATION \"${PD_USER_PDDIR}/conTorchionistSN\")\n"
+"  message(STATUS \"Copied ${PD_OUTPUT_DIR} to ${PD_USER_PDDIR}/conTorchionistSN\")\n"
 "else()\n"
 "  message(STATUS \"Pd externals dir ${PD_USER_PDDIR} not found; skipping copy\")\n"
 "endif()\n"
 "if(EXISTS \"${PLUGDATA_USER_DIR}\")\n"
 "  message(STATUS \"Found target PlugData externals dir: ${PLUGDATA_USER_DIR} - copying distribution...\")\n"
-"  file(COPY \"${PD_OUTPUT_DIR}/\" DESTINATION \"${PLUGDATA_USER_DIR}/conTorchinistSN\")\n"
-"  message(STATUS \"Copied ${PD_OUTPUT_DIR} to ${PLUGDATA_USER_DIR}/conTorchinistSN\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/\" DESTINATION \"${PLUGDATA_USER_DIR}/conTorchionistSN\")\n"
+"  message(STATUS \"Copied ${PD_OUTPUT_DIR} to ${PLUGDATA_USER_DIR}/conTorchionistSN\")\n"
 "else()\n"
 "  message(STATUS \"PlugData externals dir ${PLUGDATA_USER_DIR} not found; skipping copy\")\n"
 "endif()\n")
@@ -463,7 +463,7 @@ add_custom_target(install-puredata
 if(EXISTS ${PD_USER_PDDIR})
     message(STATUS "Instalação habilitada para: ${PD_USER_PDDIR}")
     install(DIRECTORY ${PD_OUTPUT_DIR}/
-            DESTINATION ${PD_USER_PDDIR}/conTorchinistSN
+            DESTINATION ${PD_USER_PDDIR}/conTorchionistSN
             USE_SOURCE_PERMISSIONS
             COMPONENT pd_externals
             FILES_MATCHING
@@ -478,7 +478,7 @@ if(EXISTS ${PD_USER_PDDIR})
             PATTERN "resources/*")
     # Também adiciona ao componente 'all'
     install(DIRECTORY ${PD_OUTPUT_DIR}/
-            DESTINATION ${PD_USER_PDDIR}/conTorchinistSN
+            DESTINATION ${PD_USER_PDDIR}/conTorchionistSN
             USE_SOURCE_PERMISSIONS
             COMPONENT all
             FILES_MATCHING
@@ -499,7 +499,7 @@ endif()
 if(EXISTS ${PLUGDATA_USER_DIR})
     message(STATUS "Instalação habilitada para: ${PLUGDATA_USER_DIR}")
     install(DIRECTORY ${PD_OUTPUT_DIR}/
-            DESTINATION ${PLUGDATA_USER_DIR}/conTorchinistSN
+            DESTINATION ${PLUGDATA_USER_DIR}/conTorchionistSN
             USE_SOURCE_PERMISSIONS
             COMPONENT plugdata_externals
             FILES_MATCHING
@@ -514,7 +514,7 @@ if(EXISTS ${PLUGDATA_USER_DIR})
             PATTERN "resources/*")
     # Também adiciona ao componente 'all'
     install(DIRECTORY ${PD_OUTPUT_DIR}/
-            DESTINATION ${PLUGDATA_USER_DIR}/conTorchinistSN
+            DESTINATION ${PLUGDATA_USER_DIR}/conTorchionistSN
             USE_SOURCE_PERMISSIONS
             COMPONENT all
             FILES_MATCHING
