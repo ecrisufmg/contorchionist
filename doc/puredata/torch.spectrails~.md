@@ -1,22 +1,21 @@
-# torch.amb.spectrails~
+# torch.spectrails~
 
-Ambisonic spectral trails processor based on LibTorch.
+Spectral trails processor based on LibTorch (Mono version).
 
 ## Description
 
-`torch.amb.spectrails~` is a spectral processor that detects peaks in the spectrum and creates "trails" (sustained spectral components) based on an envelope follower. It is designed for Ambisonic signals, maintaining phase coherence across channels by synchronizing the envelope detection on the omnidirectional (W) channel and applying it to all other channels.
+`torch.spectrails~` is a spectral processor that detects peaks in the spectrum and creates "trails" (sustained spectral components) based on an envelope follower. It performs peak detection, parabolic interpolation, and manages the lifecycle of spectral peaks (attack, sustain, decay). It also provides control data output for detected peaks.
 
-It performs peak detection, parabolic interpolation, and manages the lifecycle of spectral peaks (attack, sustain, decay). It also provides control data output for detected peaks.
+This is the mono version of the processor. For Ambisonic signals, use `torch.amb.spectrails~`.
 
 ## Creation
 
 ```pd
-[torch.amb.spectrails~ -order 1 -fftsize 1024 ...]
+[torch.spectrails~ -fftsize 1024 ...]
 ```
 
 ### Flags and Arguments
 
-*   **`-order <int>`**, **`-ord`**, **`-o`**: Ambisonic order. Determines the number of channels $B = (N+1)^2$. Default: 1 (4 channels).
 *   **`-fftsize <int>`**, **`-fft`**, **`-n`**: FFT size. Default: 1024.
 *   **`-overlap <int>`**, **`-of`**: Overlap factor. Default: 4.
 *   **`-threshold <float>`**, **`-thresh`**: Linear amplitude threshold for peak detection. Default: 0.01.
@@ -46,24 +45,14 @@ It performs peak detection, parabolic interpolation, and manages the lifecycle o
 
 ### Inlets
 
-The object creates dynamic inlets based on the Ambisonic order.
-Total inlets = `(order + 1)^2 * 2`.
-
-1.  **Inlet 0 (Signal)**: Channel 0 (W) Magnitude.
-2.  **Inlet 1 (Signal)**: Channel 0 (W) Phase.
-3.  **Inlet 2 (Signal)**: Channel 1 (Y) Magnitude.
-4.  **Inlet 3 (Signal)**: Channel 1 (Y) Phase.
-... and so on for all channels.
+1.  **Inlet 0 (Signal)**: Magnitude input.
+2.  **Inlet 1 (Signal)**: Phase input.
 
 ### Outlets
 
-The object creates dynamic signal outlets followed by one control outlet.
-
-1.  **Signal Outlets**: Pairs of Magnitude and Phase for each channel, processed with the spectral trails effect.
-    *   Out 0: Ch 0 Mag
-    *   Out 1: Ch 0 Phase
-    *   ...
-2.  **Control Outlet (Rightmost)**: Outputs a list for each active peak in the format:
+1.  **Outlet 0 (Signal)**: Processed Magnitude.
+2.  **Outlet 1 (Signal)**: Processed Phase.
+3.  **Outlet 2 (Control)**: Outputs a list for each active peak in the format:
     `list <rank> <freq> <mag> <state>`
 
     *   **rank**: Index of the peak (sorted by magnitude).
@@ -110,6 +99,3 @@ The object features a built-in limiter that is enabled by default (0dB threshold
 ### Detection Modes
 *   **Slope-based (0)**: Detects peaks based on the change in slope of the spectral magnitude. Good for general usage.
 *   **Prominence (1)**: Uses a prominence threshold to identify significant peaks relative to their surroundings. Better for noisy signals or complex spectra.
-
-### Ambisonic Sync
-The spectral envelope is detected solely on the first channel (W - Omnidirectional). This envelope is then applied to all other channels (X, Y, Z, etc.) to preserve the spatial image and phase relationships of the Ambisonic signal.
