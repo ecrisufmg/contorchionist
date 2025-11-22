@@ -549,7 +549,7 @@ static void torch_arr_player_anything(t_torch_arr_player *x, t_symbol *s, int ar
     }
     
     // Pause
-    if (s == gensym("pause") || (s == gensym("float") && atom_getfloat(argv) == 0.0f)) {
+    if (s == gensym("pause") || (s == gensym("float") && (atom_getfloat(argv) == 0.0f || atom_getfloat(argv) == 2.0f))) {
         torch_arr_player_pause(x);
         return;
     }
