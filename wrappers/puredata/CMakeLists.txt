@@ -285,6 +285,12 @@ foreach(SOURCE_FILE ${PD_SOURCE_FILES})
     endif()
 endforeach()
 
+# Specific linking for torch.arr.player~
+if(TARGET pd_torch_arr_player_tilde)
+    target_link_libraries(pd_torch_arr_player_tilde PRIVATE sndfile)
+    message(STATUS "Linked sndfile to pd_torch_arr_player_tilde")
+endif()
+
 # --- Common Dependency Copy Targets (REMOVED) ---
 # This logic is now handled by the copy_core_libs_to_wrapper_dist function.
 
