@@ -136,7 +136,7 @@ public:
 
     void set_threshold(T value) { threshold_ = std::max(static_cast<T>(0), value); }
     void set_attack(T value) { attack_ = std::clamp(value, static_cast<T>(0), static_cast<T>(1)); }
-    void set_decay(T value) { decay_ = std::clamp(value, static_cast<T>(0), static_cast<T>(1)); }
+    void set_decay(T value) { decay_ = std::max(value, static_cast<T>(0)); }
     void set_min_peak_distance_hz(T value, T sample_rate) {
         sample_rate_ = sample_rate;
         min_peak_distance_bins_ = (value * fft_size_) / sample_rate_;
@@ -225,6 +225,13 @@ public:
         output_magnitude_ *= decay_;
         target_magnitude_ *= decay_;
         start_magnitude_ *= decay_;
+
+        // Apply limiter to internal state if enabled to prevent explosion with decay > 1.0
+        if (use_limiter_) {
+             output_magnitude_ = torch::clamp(output_magnitude_, static_cast<T>(0.0), limiter_threshold_);
+             target_magnitude_ = torch::clamp(target_magnitude_, static_cast<T>(0.0), limiter_threshold_);
+             start_magnitude_ = torch::clamp(start_magnitude_, static_cast<T>(0.0), limiter_threshold_);
+        }
 
         // 4. Age out old peak markers (clear peaks that have decayed away)
         auto out_mag_check = output_magnitude_.template accessor<float, 1>();
