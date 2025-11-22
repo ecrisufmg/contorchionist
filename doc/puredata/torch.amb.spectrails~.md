@@ -11,13 +11,12 @@ It performs peak detection, parabolic interpolation, and manages the lifecycle o
 ## Creation
 
 ```pd
-[torch.amb.spectrails~ -order 1 -fftsize 1024 ...]
+[torch.amb.spectrails~ -order 1 -overlap 4 ...]
 ```
 
 ### Flags and Arguments
 
 *   **`-order <int>`**, **`-ord`**, **`-o`**: Ambisonic order. Determines the number of channels $B = (N+1)^2$. Default: 1 (4 channels).
-*   **`-fftsize <int>`**, **`-fft`**, **`-n`**: FFT size. Default: 1024.
 *   **`-overlap <int>`**, **`-of`**: Overlap factor. Default: 4.
 *   **`-threshold <float>`**, **`-thresh`**: Linear amplitude threshold for peak detection. Default: 0.01.
 *   **`-attack <float>`**, **`-att`**: Envelope attack rate (0.0 - 1.0). Default: 0.7.
