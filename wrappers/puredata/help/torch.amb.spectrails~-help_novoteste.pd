@@ -353,7 +353,7 @@
 #X coords 0 0 1 1 449 189 2 0 0;
 #X restore 36 456 pd;
 #X obj 1456 186 s \$0_trailsctl;
-#N canvas 0 38 1512 916 look_here 0;
+#N canvas 0 38 1512 916 look_here 1;
 #X obj -52 352 tabsend~ \$0_rfft_view;
 #X msg 1053 701 unit complex;
 #X msg 1053 725 unit magphase;
