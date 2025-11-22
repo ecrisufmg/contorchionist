@@ -465,32 +465,12 @@ if(EXISTS ${PD_USER_PDDIR})
     install(DIRECTORY ${PD_OUTPUT_DIR}/
             DESTINATION ${PD_USER_PDDIR}/conTorchionistSN
             USE_SOURCE_PERMISSIONS
-            COMPONENT pd_externals
-            FILES_MATCHING
-            PATTERN "*.pd_darwin"
-            PATTERN "*.pd_linux"
-            PATTERN "*.dll"
-            PATTERN "*.dylib"
-            PATTERN "*.so"
-            PATTERN "*.so.*"
-            PATTERN "*.pd"
-            PATTERN "*.txt"
-            PATTERN "resources/*")
+            COMPONENT pd_externals)
     # Também adiciona ao componente 'all'
     install(DIRECTORY ${PD_OUTPUT_DIR}/
             DESTINATION ${PD_USER_PDDIR}/conTorchionistSN
             USE_SOURCE_PERMISSIONS
-            COMPONENT all
-            FILES_MATCHING
-            PATTERN "*.pd_darwin"
-            PATTERN "*.pd_linux"
-            PATTERN "*.dll"
-            PATTERN "*.dylib"
-            PATTERN "*.so"
-            PATTERN "*.so.*"
-            PATTERN "*.pd"
-            PATTERN "*.txt"
-            PATTERN "resources/*")
+            COMPONENT all)
 else()
     message(STATUS "Diretório não encontrado, instalação desabilitada: ${PD_USER_PDDIR}")
 endif()
@@ -501,32 +481,12 @@ if(EXISTS ${PLUGDATA_USER_DIR})
     install(DIRECTORY ${PD_OUTPUT_DIR}/
             DESTINATION ${PLUGDATA_USER_DIR}/conTorchionistSN
             USE_SOURCE_PERMISSIONS
-            COMPONENT plugdata_externals
-            FILES_MATCHING
-            PATTERN "*.pd_darwin"
-            PATTERN "*.pd_linux"
-            PATTERN "*.dll"
-            PATTERN "*.dylib"
-            PATTERN "*.so"
-            PATTERN "*.so.*"
-            PATTERN "*.pd"
-            PATTERN "*.txt"
-            PATTERN "resources/*")
+            COMPONENT plugdata_externals)
     # Também adiciona ao componente 'all'
     install(DIRECTORY ${PD_OUTPUT_DIR}/
             DESTINATION ${PLUGDATA_USER_DIR}/conTorchionistSN
             USE_SOURCE_PERMISSIONS
-            COMPONENT all
-            FILES_MATCHING
-            PATTERN "*.pd_darwin"
-            PATTERN "*.pd_linux"
-            PATTERN "*.dll"
-            PATTERN "*.dylib"
-            PATTERN "*.so"
-            PATTERN "*.so.*"
-            PATTERN "*.pd"
-            PATTERN "*.txt"
-            PATTERN "resources/*")
+            COMPONENT all)
 else()
     message(STATUS "Diretório não encontrado, instalação desabilitada: ${PLUGDATA_USER_DIR}")
 endif()
