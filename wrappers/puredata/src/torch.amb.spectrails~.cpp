@@ -54,6 +54,11 @@ typedef struct _torch_amb_spectrails_tilde {
     // Estado do ambiente Pd
     int current_block_size_;
     float sampling_rate_;
+
+    // Stored time-based parameters for recalculation on resize
+    float stored_attack_ms_;      // -1 if using factor directly
+    float stored_decay_ms_;       // -1 if using factor directly (decay to floor)
+    float stored_decay_6db_sec_;  // -1 if using factor directly (decay 6dB)
 } t_torch_amb_spectrails_tilde;
 
 static t_class *torch_amb_spectrails_tilde_class = nullptr;
@@ -137,6 +142,17 @@ static void torch_amb_spectrails_tilde_resize_processors(t_torch_amb_spectrails_
     x->fft_size_ = fft_size;
     x->num_bins_ = x->fft_size_ / 2 + 1;
     
+    // Recalculate time-based parameters if needed
+    if (x->stored_attack_ms_ >= 0.0f) {
+        x->attack_ = attacktime_to_attack_factor(x->stored_attack_ms_ / 1000.0f, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
+    }
+
+    if (x->stored_decay_ms_ > 0.0f) {
+        x->decay_ = decayfloor_to_decay_factor(x->stored_decay_ms_ / 1000.0f, x->floor_db_, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
+    } else if (x->stored_decay_6db_sec_ > 0.0f) {
+        x->decay_ = decay6db_to_decay_factor(x->stored_decay_6db_sec_, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
+    }
+
     for (auto& proc : x->processors_) {
         if (proc) {
             proc->resize(x->num_bins_);
@@ -424,6 +440,10 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     x->floor_db_ = -150.0f; // Default to "unset" (below -140)
     x->peak_data_ready_ = false;
 
+    x->stored_attack_ms_ = -1.0f;
+    x->stored_decay_ms_ = -1.0f;
+    x->stored_decay_6db_sec_ = -1.0f;
+
     // Parser de argumentos
     pd_utils::ArgParser parser(argc, argv, &x->x_obj);
     bool verbose_arg = parser.has_flag("verbose v");
@@ -450,14 +470,32 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     
     x->num_channels_ = (x->ambi_order_ + 1) * (x->ambi_order_ + 1); // B = (N+1)^2
     
+    // Initial FFT size based on system block size (will be updated in DSP)
+    x->fft_size_ = static_cast<size_t>(sys_getblksize());
+    if (x->fft_size_ == 0) x->fft_size_ = 64; // Fallback
+    x->num_bins_ = x->fft_size_ / 2 + 1;
+
     x->threshold_ = parser.get_float("threshold thresh", 0.01f);
-    x->attack_ = parser.get_float("attack att", 0.7f);
+    
+    // Attack parsing
+    if (parser.has_flag("attackms attms")) {
+        float attms = parser.get_float("attackms attms", 0.0f);
+        x->stored_attack_ms_ = attms;
+        x->attack_ = attacktime_to_attack_factor(attms / 1000.0f, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
+    } else if (parser.has_flag("attacks atts")) {
+        float atts = parser.get_float("attacks atts", 0.0f);
+        x->stored_attack_ms_ = atts * 1000.0f;
+        x->attack_ = attacktime_to_attack_factor(atts, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
+    } else {
+        x->attack_ = parser.get_float("attack att", 0.7f);
+    }
+
     x->overlap_factor_ = static_cast<int>(parser.get_float("overlap of", 4));
     
     float decaytime_sec = parser.get_float("decaytime decayt dtime", -1.0f);
     if (decaytime_sec > 0.0f) {
-        size_t temp_fft_size = static_cast<size_t>(parser.get_float("fftsize fft n", 1024));
-        x->decay_ = decay6db_to_decay_factor(decaytime_sec, x->sampling_rate_, temp_fft_size, x->overlap_factor_);
+        x->stored_decay_6db_sec_ = decaytime_sec;
+        x->decay_ = decay6db_to_decay_factor(decaytime_sec, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         post("torch.amb.spectrails~: warning: 'decaytime' is deprecated, use 'decay6dbs' or 'decays'");
     } else {
         // Check for new flags
@@ -466,16 +504,18 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
         float decay6dbs = parser.get_float("decay6dbs", -1.0f);
         float decay6dbms = parser.get_float("decay6dbms", -1.0f);
         
-        size_t temp_fft_size = static_cast<size_t>(parser.get_float("fftsize fft n", 1024));
-        
         if (decays > 0.0f) {
-            x->decay_ = decayfloor_to_decay_factor(decays, x->floor_db_, x->sampling_rate_, temp_fft_size, x->overlap_factor_);
+            x->stored_decay_ms_ = decays * 1000.0f;
+            x->decay_ = decayfloor_to_decay_factor(decays, x->floor_db_, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         } else if (decayms > 0.0f) {
-            x->decay_ = decayfloor_to_decay_factor(decayms / 1000.0f, x->floor_db_, x->sampling_rate_, temp_fft_size, x->overlap_factor_);
+            x->stored_decay_ms_ = decayms;
+            x->decay_ = decayfloor_to_decay_factor(decayms / 1000.0f, x->floor_db_, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         } else if (decay6dbs > 0.0f) {
-            x->decay_ = decay6db_to_decay_factor(decay6dbs, x->sampling_rate_, temp_fft_size, x->overlap_factor_);
+            x->stored_decay_6db_sec_ = decay6dbs;
+            x->decay_ = decay6db_to_decay_factor(decay6dbs, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         } else if (decay6dbms > 0.0f) {
-            x->decay_ = decay6db_to_decay_factor(decay6dbms / 1000.0f, x->sampling_rate_, temp_fft_size, x->overlap_factor_);
+            x->stored_decay_6db_sec_ = decay6dbms / 1000.0f;
+            x->decay_ = decay6db_to_decay_factor(decay6dbms / 1000.0f, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         } else {
             x->decay_ = parser.get_float("decay dec", 0.999f);
         }
@@ -514,13 +554,6 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     float limiter_thresh_db = parser.get_float("limiter lim l", 0.0f);
     float limiter_thresh_lin = std::pow(10.0f, limiter_thresh_db / 20.0f);
     
-    x->fft_size_ = static_cast<size_t>(parser.get_float("fftsize fft n", 0));
-    if (x->fft_size_ == 0) {
-        x->fft_size_ = 1024;
-    }
-    
-    x->num_bins_ = x->fft_size_ / 2 + 1;
-
     // Initialize device and apply device parsing
     x->device_ = device;
     torch::Device final_device = device;
@@ -609,11 +642,13 @@ static void torch_amb_spectrails_tilde_threshold_db(t_torch_amb_spectrails_tilde
 
 static void torch_amb_spectrails_tilde_attack(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     x->attack_ = f;
+    x->stored_attack_ms_ = -1.0f; // Reset time-based tracking
     torch_amb_spectrails_tilde_configure_processors(x);
 }
 
 static void torch_amb_spectrails_tilde_attackms(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     if (f >= 0.0f) {
+        x->stored_attack_ms_ = f;
         x->attack_ = attacktime_to_attack_factor(f / 1000.0f, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         torch_amb_spectrails_tilde_configure_processors(x);
     } else {
@@ -623,6 +658,7 @@ static void torch_amb_spectrails_tilde_attackms(t_torch_amb_spectrails_tilde *x,
 
 static void torch_amb_spectrails_tilde_attacks(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     if (f >= 0.0f) {
+        x->stored_attack_ms_ = f * 1000.0f;
         x->attack_ = attacktime_to_attack_factor(f, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         torch_amb_spectrails_tilde_configure_processors(x);
     } else {
@@ -632,11 +668,15 @@ static void torch_amb_spectrails_tilde_attacks(t_torch_amb_spectrails_tilde *x, 
 
 static void torch_amb_spectrails_tilde_decay(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     x->decay_ = f;
+    x->stored_decay_ms_ = -1.0f; // Reset time-based tracking
+    x->stored_decay_6db_sec_ = -1.0f;
     torch_amb_spectrails_tilde_configure_processors(x);
 }
 
 static void torch_amb_spectrails_tilde_decayms(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     if (f > 0.0f) {
+        x->stored_decay_ms_ = f;
+        x->stored_decay_6db_sec_ = -1.0f;
         x->decay_ = decayfloor_to_decay_factor(f / 1000.0f, x->floor_db_, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         torch_amb_spectrails_tilde_configure_processors(x);
     } else {
@@ -646,6 +686,8 @@ static void torch_amb_spectrails_tilde_decayms(t_torch_amb_spectrails_tilde *x, 
 
 static void torch_amb_spectrails_tilde_decays(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     if (f > 0.0f) {
+        x->stored_decay_ms_ = f * 1000.0f;
+        x->stored_decay_6db_sec_ = -1.0f;
         x->decay_ = decayfloor_to_decay_factor(f, x->floor_db_, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         torch_amb_spectrails_tilde_configure_processors(x);
     } else {
@@ -655,6 +697,8 @@ static void torch_amb_spectrails_tilde_decays(t_torch_amb_spectrails_tilde *x, t
 
 static void torch_amb_spectrails_tilde_decay6dbms(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     if (f > 0.0f) {
+        x->stored_decay_6db_sec_ = f / 1000.0f;
+        x->stored_decay_ms_ = -1.0f;
         x->decay_ = decay6db_to_decay_factor(f / 1000.0f, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         torch_amb_spectrails_tilde_configure_processors(x);
     } else {
@@ -664,6 +708,8 @@ static void torch_amb_spectrails_tilde_decay6dbms(t_torch_amb_spectrails_tilde *
 
 static void torch_amb_spectrails_tilde_decay6dbs(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     if (f > 0.0f) {
+        x->stored_decay_6db_sec_ = f;
+        x->stored_decay_ms_ = -1.0f;
         x->decay_ = decay6db_to_decay_factor(f, x->sampling_rate_, x->fft_size_, x->overlap_factor_);
         torch_amb_spectrails_tilde_configure_processors(x);
     } else {
