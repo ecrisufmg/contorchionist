@@ -191,10 +191,54 @@ function ctgui_slider:initialize(sel, atoms)
     self.data_pending = false
     self.pending_out_value = nil
     self.pending_out_changed = false
+    self.pending_ctrl_value = nil
+    self.pending_ctrl_changed = false
+
+    -- Controller Input/Output
+    self.ctrl_active = false
+    self.v_in_min = 0
+    self.v_in_max = 127
+    self.v_out_min = 0
+    self.v_out_max = 127
+
+    if parser:has_flag("ctin") then
+        self.ctrl_active = true
+        self.v_in_min = 0
+        self.v_in_max = 127
+        self.v_out_min = 0
+        self.v_out_max = 127
+    end
+
+    if parser:has_flag("bendin") then
+        self.ctrl_active = true
+        self.v_in_min = 0
+        self.v_in_max = 16383
+        self.v_out_min = 0
+        self.v_out_max = 16383
+    end
+
+    local valin = parser:get_float_list("valin")
+    if #valin >= 2 then
+        self.ctrl_active = true
+        self.v_in_min = valin[1]
+        self.v_in_max = valin[2]
+    end
+
+    local valout = parser:get_float_list("valout")
+    if #valout >= 2 then
+        self.ctrl_active = true
+        self.v_out_min = valout[1]
+        self.v_out_max = valout[2]
+    end
 
     -- Inlets/Outlets
-    self.inlets = 1
-    self.outlets = 1
+    if self.ctrl_active then
+        self.inlets = 2
+        self.outlets = 2
+    else
+        self.inlets = 1
+        self.outlets = 1
+    end
 
     -- Initial visual pos
     self:update_visual_from_value()
@@ -381,15 +425,40 @@ function ctgui_slider:in_1_set(f)
     self:throttled_repaint()
 end
 
+function ctgui_slider:in_2_float(f)
+    if not self.ctrl_active then return end
+    
+    -- Map input range to 0-1
+    local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
+    norm = math.max(0, math.min(1, norm))
+    
+    self.visual_pos = norm
+    self.current_value = self:visual_to_value(norm)
+    
+    self:output_value()
+    self:throttled_repaint()
+end
+
 -- Output Throttling
 
 function ctgui_slider:output_value()
     if self.data_fps > 0 then
         self.pending_out_value = self.current_value
         self.pending_out_changed = true
+        
+        if self.ctrl_active then
+            local ctrl_val = self.v_out_min + self.visual_pos * (self.v_out_max - self.v_out_min)
+            self.pending_ctrl_value = ctrl_val
+            self.pending_ctrl_changed = true
+        end
+        
         self:throttled_data_output()
     else
         self:outlet(1, "float", {self.current_value})
+        if self.ctrl_active then
+            local ctrl_val = self.v_out_min + self.visual_pos * (self.v_out_max - self.v_out_min)
+            self:outlet(2, "float", {ctrl_val})
+        end
     end
 end
 
@@ -402,6 +471,11 @@ function ctgui_slider:throttled_data_output()
     if self.pending_out_changed then
         self:outlet(1, "float", {self.pending_out_value})
         self.pending_out_changed = false
+    end
+    
+    if self.pending_ctrl_changed and self.ctrl_active then
+        self:outlet(2, "float", {self.pending_ctrl_value})
+        self.pending_ctrl_changed = false
     end
     
     self.data_clock_running = true
