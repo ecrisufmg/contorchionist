@@ -135,9 +135,20 @@ function lnavu:initialize(sel, atoms)
     local gui_fps = parser:get_float("guifps", parser:get_float("guishutter", parser:get_float("fps", parser:get_float("shutter", 20))))
     self.gui_fps = (gui_fps > 0) and gui_fps or 20
     
+    -- Data FPS / Shutter (Output throttling)
+    local data_fps = parser:get_float("datafps", parser:get_float("datashutter", 0))
+    self.data_fps = (data_fps > 0) and data_fps or 0
+    
     self.repaint_clock = pd.Clock:new():register(self, "repaint_tick")
     self.repaint_clock_running = false
     self.repaint_pending = false
+    
+    self.data_clock = pd.Clock:new():register(self, "data_tick")
+    self.data_clock_running = false
+    self.data_pending = false
+    self.pending_out_values = {}
+    self.pending_out_changed = {}
+    self.pending_list_out = nil
 
     -- Override repaint for throttling
     self._raw_repaint = self.repaint
@@ -316,7 +327,13 @@ function lnavu:process_channel_input(inlet, f)
     end
     
     -- Passthrough: envia valor recebido pela outlet correspondente
-    self:outlet(inlet, "float", {f})
+    if self.data_fps > 0 then
+        self.pending_out_values[inlet] = f
+        self.pending_out_changed[inlet] = true
+        self:throttled_data_output()
+    else
+        self:outlet(inlet, "float", {f})
+    end
     
     self:throttled_repaint()
 end
@@ -365,7 +382,13 @@ function lnavu:in_1_list(atoms)
         end
     end
     
-    self:outlet(1, "list", values)
+    if self.data_fps > 0 then
+        self.pending_list_out = values
+        self:throttled_data_output()
+    else
+        self:outlet(1, "list", values)
+    end
+    
     self:throttled_repaint()
 end
 
@@ -454,6 +477,41 @@ function lnavu:repaint_tick()
     if self.repaint_pending then
         self.repaint_pending = false
         self:throttled_repaint()
+    end
+end
+
+-- Métodos de data output com throttle
+function lnavu:_send_data()
+    if self.list_input then
+        if self.pending_list_out then
+            self:outlet(1, "list", self.pending_list_out)
+            self.pending_list_out = nil
+        end
+    else
+        for i = 1, self.num_channels do
+            if self.pending_out_changed[i] then
+                self:outlet(i, "float", {self.pending_out_values[i]})
+                self.pending_out_changed[i] = false
+            end
+        end
+    end
+end
+
+function lnavu:throttled_data_output()
+    if self.data_clock_running then
+        self.data_pending = true
+        return
+    end
+    self:_send_data()
+    self.data_clock_running = true
+    self.data_clock:delay(1000 / self.data_fps)
+end
+
+function lnavu:data_tick()
+    self.data_clock_running = false
+    if self.data_pending then
+        self.data_pending = false
+        self:throttled_data_output()
     end
 end
 
@@ -1416,6 +1474,18 @@ function lnavu:in_1_leds(atoms)
         
         self:repaint()
     end
+end
+
+-- Método para alterar data_fps em tempo real
+function lnavu:in_1_datafps(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" then
+        self.data_fps = (f > 0) and f or 0
+    end
+end
+
+function lnavu:in_1_datashutter(atoms)
+    self:in_1_datafps(atoms)
 end
 
 -- Gera o comando de instanciação para copiar
