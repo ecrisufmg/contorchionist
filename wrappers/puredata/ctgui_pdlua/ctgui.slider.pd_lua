@@ -239,6 +239,7 @@ function ctgui_slider:initialize(sel, atoms)
     self.outlets = 2
 
     -- Initial visual pos
+    self.handle_size = 10
     self:update_visual_from_value()
 
     -- Override repaint for throttling
@@ -246,6 +247,32 @@ function ctgui_slider:initialize(sel, atoms)
     self.repaint = self.throttled_repaint
 
     return true
+end
+
+function ctgui_slider:get_zero_visual()
+    -- Calculate visual position (0-1) that corresponds to 0dB
+    -- to align with ctgui.vu which uses 0.85 of (height-2)
+    
+    local vu_zero_ratio = 0.85
+    local vu_margin = 2
+    
+    local dim = (self.orientation == "vertical") and self.height or self.width
+    local handle = self.handle_size or 10
+    
+    -- VU 0dB position from bottom (pixels)
+    local vu_zero_px = vu_zero_ratio * (dim - vu_margin)
+    
+    -- Slider 0dB position from bottom (pixels)
+    -- pos_px = handle/2 + visual * (dim - handle)
+    -- We want pos_px = vu_zero_px
+    
+    local slider_track_len = dim - handle
+    if slider_track_len <= 0 then return 0.85 end
+    
+    local visual = (vu_zero_px - (handle / 2)) / slider_track_len
+    
+    -- Clamp to reasonable bounds
+    return math.max(0.1, math.min(0.9, visual))
 end
 
 function ctgui_slider:in_1_getcode()
@@ -302,20 +329,11 @@ function ctgui_slider:db_to_visual(db)
     db = math.max(self.min_val, math.min(self.max_val, db))
     
     -- Zero point visual (0dB)
-    -- In VU this is calculated or fixed at 0.85. 
-    -- Here we should probably calculate it based on min/max if 0 is inside range.
-    -- If max is 12 and min is -120, 0 is near top.
-    -- Let's use the same logic: 0dB is the reference point.
+    -- Calculated dynamically to align with ctgui.vu
+    local zero_visual = self:get_zero_visual()
     
     -- If 0 is not in range, this logic might be weird, but for a fader usually it is.
     -- Let's assume standard audio fader range.
-    
-    local zero_visual = 0.85 -- Default "unity gain" position
-    
-    -- If max < 0, then 0 is off scale top.
-    -- If min > 0, then 0 is off scale bottom.
-    
-    -- Let's stick to the VU curve logic exactly for consistency.
     
     if db <= 0 then
         local linear = (db - self.min_val) / (0 - self.min_val)
@@ -340,7 +358,7 @@ end
 
 function ctgui_slider:visual_to_db(visual)
     visual = math.max(0, math.min(1, visual))
-    local zero_visual = 0.85
+    local zero_visual = self:get_zero_visual()
     
     if visual <= zero_visual then
         local linear
@@ -564,7 +582,7 @@ function ctgui_slider:paint(g)
         if not self.c_mark then self.c_mark = {128, 128, 128} end
         g:set_color(self.c_mark[1], self.c_mark[2], self.c_mark[3])
         local zero_vis = self:value_to_visual(0)
-        local handle_thickness = 10
+        local handle_thickness = self.handle_size
         
         if self.orientation == "vertical" then
             local track_len = self.height - handle_thickness
@@ -582,7 +600,7 @@ function ctgui_slider:paint(g)
     -- Handle
     g:set_color(self.c_handle[1], self.c_handle[2], self.c_handle[3])
     
-    local handle_thickness = 10 -- Pixel size along the axis
+    local handle_thickness = self.handle_size -- Pixel size along the axis
     
     if self.orientation == "vertical" then
         -- Visual pos 0 is bottom, 1 is top
