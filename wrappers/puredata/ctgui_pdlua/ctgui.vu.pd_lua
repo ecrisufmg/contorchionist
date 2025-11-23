@@ -104,6 +104,9 @@ function lnavu:initialize(sel, atoms)
     -- Legenda (escala de dB)
     self.show_label = parser:has_flag("scale")
     
+    -- Valores customizados para a escala (opcional)
+    self.custom_scale_marks = parser:get_float_list("dbvals scalevals", {})
+    
     -- Altura da área de escala (quando @scale está ativo)
     self.scale_height = parser:get_float("scaleh scale_height", 0)  -- 0 = automático
     
@@ -507,6 +510,18 @@ end
 
 -- Gera lista de valores de dB para a legenda
 function lnavu:get_label_marks()
+    -- Se houver valores customizados definidos pelo usuário, usa eles
+    if self.custom_scale_marks and #self.custom_scale_marks > 0 then
+        local marks = {}
+        for _, db in ipairs(self.custom_scale_marks) do
+            if db >= self.db_min and db <= self.db_max then
+                table.insert(marks, db)
+            end
+        end
+        table.sort(marks)
+        return marks
+    end
+
     -- Pontos de referência importantes (ordem de prioridade)
     local base_marks = {-180, -120, -48, -24, -12, -6, -3, 0, 3, 6, 12, 24, 48, 90, 120, 180}
     
@@ -1444,6 +1459,12 @@ function lnavu:get_flags_command()
     end
     if self.show_label then
         cmd = cmd .. " @scale"
+        if self.custom_scale_marks and #self.custom_scale_marks > 0 then
+            cmd = cmd .. " @dbvals"
+            for _, val in ipairs(self.custom_scale_marks) do
+                cmd = cmd .. " " .. tostring(val)
+            end
+        end
     end
     if self.num_channels > 1 then
         cmd = cmd .. string.format(" @channels %g", self.num_channels)
