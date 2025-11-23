@@ -409,8 +409,8 @@ function thisobj:in_1_stop()
     self.state = "stop"
     self.position = 0
     self:repaint()
-    self:outlet(1, "stop", {})
     self:output_position()
+    self:outlet(1, "float", {0})
 end
 
 function thisobj:in_1_list(atoms)
@@ -486,7 +486,11 @@ function thisobj:set_state(state, notify)
     self.state = state
     self:repaint()
     if notify then
-        self:outlet(1, state, {})
+        local val = 0
+        if state == "play" then val = 1
+        elseif state == "pause" then val = 2
+        end
+        self:outlet(1, "float", {val})
     end
 end
 
