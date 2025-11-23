@@ -253,12 +253,19 @@ function lnavu:postinitialize()
     
     if self.show_label then
         if self.orientation == "vertical" then
-            -- Vertical: label à direita (proporcional à altura, mínimo 30px para 3 dígitos)
+            -- Vertical: label à direita (proporcional à altura)
             local label_width
             if self.scale_height > 0 then
                 label_width = self.scale_height
             else
-                label_width = math.max(30, math.min(45, self.height / 10))
+                -- Calcula tamanho de fonte estimado (mesma lógica do paint_labels)
+                local font_size = 11
+                if self.height < 200 then
+                    font_size = math.max(6, math.floor(9 * self.height / 200) + 1)
+                end
+                
+                -- Largura baseada na fonte (aprox 3 caracteres + margem)
+                label_width = math.ceil(font_size * 2.8)
             end
             display_width = display_width + label_width
             self.label_area = label_width
@@ -1108,9 +1115,13 @@ function lnavu:paint_labels(g)
     g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])  -- Cor do texto e marcadores
     
     -- Calcula tamanho de fonte baseado na largura (para horizontal) ou altura (para vertical)
-    local font_size = 10  -- padrão
+    local font_size = 11  -- padrão
     if self.orientation == "vertical" then
-        -- Vertical: não precisa ajustar
+        -- Vertical: reduz fonte para alturas menores que 200
+        if self.height < 200 then
+            -- Permite fonte menor (6px) e escala um pouco mais agressiva
+            font_size = math.max(6, math.floor(9 * self.height / 200) + 1)
+        end
     else
         -- Horizontal: reduz fonte para larguras menores que 200
         if self.width < 200 then
@@ -1120,31 +1131,31 @@ function lnavu:paint_labels(g)
     
     if self.orientation == "vertical" then
         -- Vertical: legenda à direita
-        local label_area_width = self.label_area or 30
-        local label_x = self.width
-        local text_height = font_size - 2  -- Altura aproximada do texto
+        local label_area_width = self.label_area or (font_size * 2.7)
+        local label_x = self.width + 3
+        local text_height = font_size  -- Altura aproximada do texto
         
         for _, db in ipairs(marks) do
             local visual_pos = self:db_to_visual(db)
             local y = self.height - (visual_pos * self.height)
             
             -- Linha horizontal pequena (marcador)
-            g:fill_rect(self.width, y, 3, 1)
+            g:fill_rect(self.width + 2, y, 3, 1)
             
             -- Texto do dB - centralizado na área de scale
             local label = string.format("%g", db)
-            local text_y = y - (text_height / 2)
+            local text_y = y - (text_height / 2) + 0.5
             
             -- Limita para não sair do topo ou fundo
             if text_y < 0 then
                 text_y = 0
-            elseif text_y + text_height > self.height + label_area_width then
-                text_y = self.height + label_area_width - text_height
+            elseif text_y + text_height > self.height then
+                text_y = self.height - text_height
             end
             
-            -- Centraliza horizontalmente na área de scale
-            local text_x = label_x + (label_area_width / 2) - 10  -- -10 para centralizar aprox.
-            g:draw_text(label, text_x, text_y, 20, font_size)
+            -- Posiciona texto à direita do marcador
+            local text_x = label_x + 3
+            g:draw_text(label, text_x, text_y, label_area_width, font_size)
         end
     else
         -- Horizontal: legenda abaixo
