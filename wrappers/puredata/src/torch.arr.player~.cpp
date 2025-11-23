@@ -61,6 +61,7 @@ struct t_torch_arr_player {
     double x_last_sent_timesmp;
     double x_last_sent_rate;
     bool x_first_output;
+    bool x_send_duration_on_tick; // Flag to send duration on next tick
 };
 
 // Helper to resolve path
@@ -140,41 +141,36 @@ static void torch_arr_player_output_status(t_torch_arr_player *x) {
     double times = (x->x_file_sr > 0) ? (timesmp / x->x_file_sr) : 0.0;
     double rate = x->x_rate;
 
-    t_atom argv[2];
+    t_atom at;
 
     // Rate
     if (x->x_first_output || rate != x->x_last_sent_rate) {
-        SETSYMBOL(argv+0, gensym("rate"));
-        SETFLOAT(argv+1, rate);
-        outlet_list(x->x_out_status, &s_list, 2, argv);
+        SETFLOAT(&at, rate);
+        outlet_anything(x->x_out_status, gensym("rate"), 1, &at);
         x->x_last_sent_rate = rate;
     }
 
-    // Time (timesmp, timems, times)
+    // Time (smp, milis, sec)
     if (x->x_first_output || timesmp != x->x_last_sent_timesmp) {
-        // times
-        SETSYMBOL(argv+0, gensym("times"));
-        SETFLOAT(argv+1, times);
-        outlet_list(x->x_out_status, &s_list, 2, argv);
+        // sec (was tsec)
+        SETFLOAT(&at, times);
+        outlet_anything(x->x_out_status, gensym("sec"), 1, &at);
 
-        // timems
-        SETSYMBOL(argv+0, gensym("timems"));
-        SETFLOAT(argv+1, timems);
-        outlet_list(x->x_out_status, &s_list, 2, argv);
+        // milis (was tmilis)
+        SETFLOAT(&at, timems);
+        outlet_anything(x->x_out_status, gensym("milis"), 1, &at);
 
-        // timesmp
-        SETSYMBOL(argv+0, gensym("timesmp"));
-        SETFLOAT(argv+1, timesmp);
-        outlet_list(x->x_out_status, &s_list, 2, argv);
+        // smp (was tsmp)
+        SETFLOAT(&at, timesmp);
+        outlet_anything(x->x_out_status, gensym("smp"), 1, &at);
         
         x->x_last_sent_timesmp = timesmp;
     }
 
     // State
     if (x->x_first_output || state != x->x_last_sent_state) {
-        SETSYMBOL(argv+0, gensym("state"));
-        SETFLOAT(argv+1, state);
-        outlet_list(x->x_out_status, &s_list, 2, argv);
+        SETFLOAT(&at, (t_float)state);
+        outlet_anything(x->x_out_status, gensym("state"), 1, &at);
         x->x_last_sent_state = state;
     }
     
@@ -183,6 +179,14 @@ static void torch_arr_player_output_status(t_torch_arr_player *x) {
 
 // Clock callback
 static void torch_arr_player_tick(t_torch_arr_player *x) {
+    if (x->x_send_duration_on_tick) {
+        if (x->x_file_sr > 0) {
+            t_atom at;
+            SETFLOAT(&at, (t_float)x->x_file_frames / (t_float)x->x_file_sr);
+            outlet_anything(x->x_out_status, gensym("tsec"), 1, &at);
+        }
+        x->x_send_duration_on_tick = false;
+    }
     torch_arr_player_output_status(x);
 }
 
@@ -456,6 +460,12 @@ static void torch_arr_player_open(t_torch_arr_player *x, t_symbol *s) {
     x->x_file_sr = sfinfo.samplerate;
     
     post("torch.arr.player~: Loaded %s (%d frames, %d Hz)", filename.c_str(), frames, (int)x->x_file_sr);
+
+    if (x->x_file_sr > 0) {
+        t_atom at;
+        SETFLOAT(&at, (t_float)frames / (t_float)x->x_file_sr);
+        outlet_anything(x->x_out_status, gensym("tsec"), 1, &at);
+    }
 }
 
 static void torch_arr_player_play(t_torch_arr_player *x) {
@@ -567,6 +577,34 @@ static void torch_arr_player_anything(t_torch_arr_player *x, t_symbol *s, int ar
         torch_arr_player_seek(x, pos);
         return;
     }
+
+    // smp (samples)
+    if (s == gensym("smp")) {
+        float pos = 0;
+        if (argc > 0) pos = atom_getfloat(argv);
+        torch_arr_player_seek(x, pos);
+        return;
+    }
+
+    // sec (seconds)
+    if (s == gensym("sec")) {
+        float sec = 0;
+        if (argc > 0) sec = atom_getfloat(argv);
+        if (x->x_file_sr > 0) {
+            torch_arr_player_seek(x, sec * x->x_file_sr);
+        }
+        return;
+    }
+
+    // milis (milliseconds)
+    if (s == gensym("milis")) {
+        float ms = 0;
+        if (argc > 0) ms = atom_getfloat(argv);
+        if (x->x_file_sr > 0) {
+            torch_arr_player_seek(x, (ms / 1000.0) * x->x_file_sr);
+        }
+        return;
+    }
     
     // Rate
     if (s == gensym("rate")) {
@@ -654,6 +692,7 @@ static void *torch_arr_player_new(t_symbol *s, int argc, t_atom *argv) {
     x->x_last_sent_timesmp = -1.0;
     x->x_last_sent_rate = 0.0;
     x->x_first_output = true;
+    x->x_send_duration_on_tick = false;
 
     // Init arrays
     x->x_array_names.resize(x->x_n_channels);
@@ -670,16 +709,18 @@ static void *torch_arr_player_new(t_symbol *s, int argc, t_atom *argv) {
     x->x_canvas = canvas_getcurrent();
     if (!x->x_canvas) post("torch.arr.player~: Warning - Could not get current canvas.");
 
+    // Init clock
+    x->x_clock = clock_new(x, (t_method)torch_arr_player_tick);
+
     // Load file if provided in args
     std::string file = parser.get_string("file f");
     post("torch.arr.player~: -file argument: '%s'", file.c_str());
 
     if (!file.empty()) {
         torch_arr_player_open(x, gensym(file.c_str()));
+        x->x_send_duration_on_tick = true;
+        clock_delay(x->x_clock, 0);
     }
-
-    // Init clock
-    x->x_clock = clock_new(x, (t_method)torch_arr_player_tick);
 
     return (void *)x;
 }
