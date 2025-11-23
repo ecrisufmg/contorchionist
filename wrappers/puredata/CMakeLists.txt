@@ -317,4 +317,28 @@ else()
     endif()
 endif()
 
+# --- Copy ctgui_pdlua to dist/ctgui ---
+set(CTGUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ctgui_pdlua")
+set(CTGUI_DIST_DIR "${PROJECT_DIST_DIR}/ctgui")
+
+if(IS_DIRECTORY "${CTGUI_SOURCE_DIR}" AND NOT TARGET pd_copy_ctgui)
+    add_custom_target(pd_copy_ctgui ALL
+        COMMENT "Preparing to copy ctgui_pdlua directory to ${CTGUI_DIST_DIR}"
+    )
+
+    add_custom_command(
+        TARGET pd_copy_ctgui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CTGUI_DIST_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CTGUI_SOURCE_DIR}" "${CTGUI_DIST_DIR}"
+        COMMENT "Copying ctgui_pdlua directory from ${CTGUI_SOURCE_DIR} to ${CTGUI_DIST_DIR}"
+        VERBATIM
+    )
+
+    message(STATUS "Configured copy of ctgui_pdlua directory to ${CTGUI_DIST_DIR}")
+else()
+    if(NOT IS_DIRECTORY "${CTGUI_SOURCE_DIR}")
+        message(WARNING "ctgui_pdlua directory not found: ${CTGUI_SOURCE_DIR}")
+    endif()
+endif()
+
 message(STATUS "======== Finished Configuring PureData Wrappers ========")
