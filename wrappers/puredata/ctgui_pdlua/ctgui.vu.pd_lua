@@ -99,9 +99,17 @@ function lnavu:initialize(sel, atoms)
     -- Número de canais (para VUs sobrepostos)
     self.num_channels = math.max(1, math.floor(parser:get_float("channels ch", 1)))
     
-    -- Define inlets e outlets (um por canal)
-    self.inlets = self.num_channels
-    self.outlets = self.num_channels
+    -- Modo de entrada em lista (todos os canais em uma lista no primeiro inlet)
+    self.list_input = parser:has_flag("listin")
+    
+    -- Define inlets e outlets
+    if self.list_input then
+        self.inlets = 1
+        self.outlets = 1
+    else
+        self.inlets = self.num_channels
+        self.outlets = self.num_channels
+    end
     
     -- Tags de canais (opcionais)
     self.channel_tags = parser:get_string_list("chtags", {})
@@ -109,11 +117,17 @@ function lnavu:initialize(sel, atoms)
     -- Mostrar labels de canal (apenas com @chlabels)
     self.show_channel_labels = parser:has_flag("chlabels chlabel")
     
-    -- FPS limit (throttle de atualização visual)
-    self.fps = math.max(1, parser:get_float("fps", 20))  -- padrão 20 FPS
-    self.frame_counter = 0
-    self.frame_skip = math.max(1, math.floor(60 / self.fps))  -- quantos frames pular
-    self.needs_repaint = false
+    -- FPS / Shutter (GUI)
+    local gui_fps = parser:get_float("guifps", parser:get_float("guishutter", parser:get_float("fps", parser:get_float("shutter", 20))))
+    self.gui_fps = (gui_fps > 0) and gui_fps or 20
+    
+    self.repaint_clock = pd.Clock:new():register(self, "repaint_tick")
+    self.repaint_clock_running = false
+    self.repaint_pending = false
+
+    -- Override repaint for throttling
+    self._raw_repaint = self.repaint
+    self.repaint = self.throttled_repaint
     
     -- Cor de fundo (padrão cinza 50 50 50)
     local backrgb = parser:get_float_list("backrgb back_rgb bgcolor bg_color bg")
@@ -157,11 +171,15 @@ function lnavu:initialize(sel, atoms)
     -- Armazena os argumentos originais para o menu de contexto
     self.creation_args = atoms
     
-    -- Ajusta dbmax para alinhamento correto com a escala não-linear
-    -- No modo LED: um LED termina exatamente em 0dB
-    -- No modo contínuo: também precisa do ajuste para mapear corretamente
+    -- Calcula a posição visual de 0dB para alinhar com os LEDs
+    -- Em vez de ajustar dbmax, ajustamos o ponto de split visual
     if self.led_mode then
-        self:adjust_dbmax_for_zero_alignment()
+        local led_size = 1.0 / self.num_leds
+        -- Encontra a fronteira de LED mais próxima de 0.85
+        local target_leds = math.floor(0.85 / led_size + 0.5)
+        self.zero_visual = target_leds * led_size
+    else
+        self.zero_visual = 0.85
     end
     
     return true
@@ -233,9 +251,61 @@ function lnavu:process_channel_input(inlet, f)
     self:throttled_repaint()
 end
 
+-- Processa entrada de lista (quando @listin está ativo)
+-- Formato: index0 value0 [index1 value1 ...]
+-- index é 0-based
+function lnavu:in_1_list(atoms)
+    if not self.list_input then return end
+    
+    local values = atoms
+    if type(values) ~= "table" then values = {values} end
+    
+    -- Itera em pares (index value)
+    for i = 1, #values, 2 do
+        local idx = values[i]
+        local val = values[i+1]
+        
+        if type(idx) == "number" and type(val) == "number" then
+            local ch = math.floor(idx) + 1  -- converte 0-based para 1-based
+            
+            if ch >= 1 and ch <= self.num_channels then
+                self.channel_db[ch] = val
+                
+                -- Atualiza pico
+                if val > self.channel_peak_db[ch] then
+                    self.channel_peak_db[ch] = val
+                    self.channel_peak_hold[ch] = 30
+                end
+                
+                -- Decrementa hold
+                if self.channel_peak_hold[ch] > 0 then
+                    self.channel_peak_hold[ch] = self.channel_peak_hold[ch] - 1
+                else
+                    self.channel_peak_db[ch] = math.max(val, self.channel_peak_db[ch] - 0.5)
+                end
+            end
+        end
+    end
+    
+    -- Atualiza current_db (máximo)
+    self.current_db = self.db_min
+    for i = 1, self.num_channels do
+        if self.channel_db[i] > self.current_db then
+            self.current_db = self.channel_db[i]
+        end
+    end
+    
+    self:outlet(1, "list", values)
+    self:throttled_repaint()
+end
+
 -- Métodos individuais para cada inlet (pd-lua requer isso)
 function lnavu:in_1_float(f)
-    self:process_channel_input(1, f)
+    if self.list_input then
+        self:in_1_list({f})
+    else
+        self:process_channel_input(1, f)
+    end
 end
 
 function lnavu:in_2_float(f)
@@ -300,11 +370,20 @@ end
 
 -- Método de repaint com throttle (controle de FPS)
 function lnavu:throttled_repaint()
-    self.frame_counter = self.frame_counter + 1
-    
-    if self.frame_counter >= self.frame_skip then
-        self.frame_counter = 0
-        self:repaint()
+    if self.repaint_clock_running then
+        self.repaint_pending = true
+        return
+    end
+    self:_raw_repaint()
+    self.repaint_clock_running = true
+    self.repaint_clock:delay(1000 / self.gui_fps)
+end
+
+function lnavu:repaint_tick()
+    self.repaint_clock_running = false
+    if self.repaint_pending then
+        self.repaint_pending = false
+        self:throttled_repaint()
     end
 end
 
@@ -421,6 +500,9 @@ function lnavu:db_to_visual(db)
     -- Clamp db entre dbmin e dbmax
     db = math.max(self.db_min, math.min(self.db_max, db))
     
+    -- Ponto visual de 0dB (calculado na inicialização)
+    local zero_visual = self.zero_visual or 0.85
+    
     -- Divide em duas regiões: abaixo de 0dB e acima de 0dB
     if db <= 0 then
         -- Região de dbmin até 0dB usa a curva não-linear
@@ -432,9 +514,7 @@ function lnavu:db_to_visual(db)
         -- -120dB -> 0.0   => visual ~0.0
         -- -60dB  -> 0.5   => visual ~0.2  (comprimido)
         -- -20dB  -> 0.833 => visual ~0.5  (região útil começa)
-        -- 0dB    -> 1.0   => visual ~0.85
-        
-        local zero_visual = 0.85  -- 0dB ocupa 85% do espaço visual total
+        -- 0dB    -> 1.0   => visual ~zero_visual
         
         local visual
         if linear < 0.5 then
@@ -452,9 +532,9 @@ function lnavu:db_to_visual(db)
         
         return visual
     else
-        -- Região acima de 0dB: linear de 0.85 a 1.0
+        -- Região acima de 0dB: linear de zero_visual a 1.0
         local t = db / (self.db_max - 0)
-        return 0.85 + (0.15 * t)
+        return zero_visual + ((1.0 - zero_visual) * t)
     end
 end
 
@@ -463,7 +543,7 @@ end
 function lnavu:visual_to_db(visual)
     visual = math.max(0, math.min(1, visual))
     
-    local zero_visual = 0.85  -- 0dB está em 85% da posição visual
+    local zero_visual = self.zero_visual or 0.85
     
     if visual <= zero_visual then
         -- Região de dbmin até 0dB
@@ -487,55 +567,16 @@ function lnavu:visual_to_db(visual)
         return db
     else
         -- Região acima de 0dB (linear)
-        local t = (visual - 0.85) / 0.15
+        local t = (visual - zero_visual) / (1.0 - zero_visual)
         local db = 0 + (t * (self.db_max - 0))
         return db
     end
 end
 
 -- Ajusta dbmax para que um LED termine exatamente em 0dB
+-- DEPRECATED: Removido em favor de self.zero_visual dinâmico
 function lnavu:adjust_dbmax_for_zero_alignment()
-    -- Calcula a posição visual de 0dB com o dbmax atual
-    local zero_visual = self:db_to_visual(0)
-    
-    -- Cada LED ocupa 1/num_leds do espaço visual
-    local led_visual_size = 1.0 / self.num_leds
-    
-    -- Encontra qual LED deve terminar em 0dB
-    -- Queremos que zero_visual coincida com o fim de um LED
-    local led_index_at_zero = math.floor(zero_visual / led_visual_size)
-    
-    -- O LED que contém 0dB vai de led_index_at_zero a (led_index_at_zero + 1)
-    -- Queremos que 0dB seja exatamente o fim deste LED
-    local target_visual = (led_index_at_zero + 1) * led_visual_size
-    
-    -- Agora precisamos encontrar qual dB corresponde a esta posição visual
-    -- Invertendo db_to_visual para encontrar o dB que produz target_visual
-    -- Como db_to_visual é não-linear, fazemos busca binária ou aproximação
-    
-    -- Método iterativo simples: ajusta dbmax até zero_visual coincidir com fim de LED
-    local new_dbmax = self.db_max
-    local tolerance = 0.01  -- tolerância para convergência
-    local max_iterations = 50
-    
-    for i = 1, max_iterations do
-        self.db_max = new_dbmax
-        local current_zero_visual = self:db_to_visual(0)
-        local current_led_end = (led_index_at_zero + 1) * led_visual_size
-        
-        local error = current_zero_visual - current_led_end
-        
-        if math.abs(error) < tolerance * led_visual_size then
-            break  -- Convergiu!
-        end
-        
-        -- Ajusta dbmax proporcionalmente ao erro
-        -- Se 0dB está muito alto (error > 0), aumenta dbmax
-        -- Se 0dB está muito baixo (error < 0), diminui dbmax
-        new_dbmax = new_dbmax + error * (self.db_max - self.db_min) / 10
-    end
-    
-    self.db_max = new_dbmax
+    -- Função mantida vazia para compatibilidade se chamada internamente
 end
 
 -- Desenha o VU meter
@@ -826,12 +867,6 @@ end
 -- Desenha modo LED (barras discretas)
 function lnavu:paint_led_mode(g, visual_position)
     -- LEDs dividem o espaço visual igualmente (não por dB)
-    local led_visual_size = 1.0 / self.num_leds
-    
-    -- Calcula o gap baseado no tamanho disponível
-    local gap = 2  -- gap padrão em pixels
-    local corner_radius = 3  -- Raio dos cantos arredondados padrão
-    local use_rounded = true
     local led_visual_size = 1.0 / self.num_leds
     
     -- Calcula o gap baseado no tamanho disponível
@@ -1236,16 +1271,23 @@ function lnavu:in_1_bang()
 end
 
 -- Método para alterar FPS em tempo real
-function lnavu:in_1_fps(atoms)
+function lnavu:in_1_guifps(atoms)
     local f = type(atoms) == "table" and atoms[1] or atoms
-    if type(f) == "number" then
-        self.fps = math.max(1, math.floor(f))
-        self.frame_skip = math.max(1, math.floor(60 / self.fps))
-        self.frame_counter = 0
-        pd.post(string.format("ctgui.vu: FPS set to %d (frame_skip=%d)", self.fps, self.frame_skip))
-    else
-        pd.post("ctgui.vu: fps expects a number")
+    if type(f) == "number" and f > 0 then
+        self.gui_fps = f
     end
+end
+
+function lnavu:in_1_guishutter(atoms)
+    self:in_1_guifps(atoms)
+end
+
+function lnavu:in_1_fps(atoms)
+    self:in_1_guifps(atoms)
+end
+
+function lnavu:in_1_shutter(atoms)
+    self:in_1_guifps(atoms)
 end
 
 -- Gera o comando de instanciação para copiar
@@ -1300,6 +1342,9 @@ function lnavu:get_flags_command()
     if self.num_channels > 1 then
         cmd = cmd .. string.format(" @channels %g", self.num_channels)
     end
+    if self.list_input then
+        cmd = cmd .. " @listin"
+    end
     if not self.led_mode then
         -- Modo contínuo precisa ser especificado (LED é default)
         cmd = cmd .. " @cont"
@@ -1314,7 +1359,6 @@ end
 
 -- Mensagens para obter comandos
 function lnavu:in_1_getcode(atoms)
-    local cmd = self:get_creation_command()
     local cmd = self:get_creation_command()
     pd.post(cmd)
     self:outlet(1, "symbol", {cmd})

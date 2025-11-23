@@ -56,3 +56,7 @@ lib/
 #zzz_test_spectrail
 zzz_test_spectrail/*.wav
 reference/
+
+
+install_ctgui_lua.sh
+debug_plugdata.sh
