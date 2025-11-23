@@ -131,6 +131,9 @@ function ctgui_clock:initialize(sel, atoms)
 
     -- State
     self.seconds = 0
+    self.state = 0 -- 0: stop, 1: play, 2: pause
+    self.sr = 48000
+    self.bs = 64
 
     -- Clocks
     self.repaint_clock = pd.Clock:new():register(self, "repaint_tick")
@@ -142,6 +145,8 @@ function ctgui_clock:initialize(sel, atoms)
     self.data_pending = false
     self.pending_out_time = nil
     self.pending_out_changed = false
+    
+    self.play_clock = pd.Clock:new():register(self, "play_tick")
     
     -- Inlets
     self.inlets = 1
@@ -158,19 +163,73 @@ function ctgui_clock:postinitialize()
     self:set_size(self.width, self.height)
 end
 
-function ctgui_clock:in_1_float(f)
-    self.seconds = f
+function ctgui_clock:dsp(sr, bs)
+    -- Note: dsp method is only called if this is a signal object (tilde object)
+    -- For control objects, use 'samplerate' and 'blocksize' messages if needed
+    self.sr = sr
+    self.bs = bs
+    return true
+end
+
+function ctgui_clock:play_tick()
+    if self.state == 1 then
+        local sr = (self.sr > 0) and self.sr or 48000
+        local bs = (self.bs > 0) and self.bs or 64
+        local dt = bs / sr
+        self.seconds = self.seconds + dt
+        self:throttled_repaint()
+        self:output_data()
+        self.play_clock:delay(dt * 1000)
+    end
+end
+
+function ctgui_clock:in_1_play()
+    if self.state ~= 1 then
+        self.state = 1
+        self.play_clock:delay(0)
+    end
+end
+
+function ctgui_clock:in_1_pause()
+    self.state = 2
+    self.play_clock:unset()
+end
+
+function ctgui_clock:in_1_stop()
+    self.state = 0
+    self.play_clock:unset()
+    self.seconds = 0
     self:throttled_repaint()
     self:output_data()
 end
 
+function ctgui_clock:in_1_state(atoms)
+    local s = type(atoms) == "table" and atoms[1] or atoms
+    if type(s) == "number" then
+        local state = math.floor(s)
+        if state == 0 then self:in_1_stop()
+        elseif state == 1 then self:in_1_play()
+        elseif state == 2 then self:in_1_pause()
+        end
+    end
+end
+
+function ctgui_clock:in_1_float(f)
+    self:in_1_state(f)
+end
+
 function ctgui_clock:in_1_list(atoms)
     if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
-        self.seconds = atoms[1]
-        self:throttled_repaint()
-        self:output_data()
+        self:in_1_state(atoms[1])
     elseif type(atoms) == "number" then
-        self.seconds = atoms
+        self:in_1_state(atoms)
+    end
+end
+
+function ctgui_clock:in_1_time(atoms)
+    local t = type(atoms) == "table" and atoms[1] or atoms
+    if type(t) == "number" then
+        self.seconds = t
         self:throttled_repaint()
         self:output_data()
     end
@@ -324,4 +383,18 @@ end
 
 function ctgui_clock:in_1_datashutter(atoms)
     self:in_1_datafps(atoms)
+end
+
+function ctgui_clock:in_1_samplerate(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" and f > 0 then
+        self.sr = f
+    end
+end
+
+function ctgui_clock:in_1_blocksize(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" and f > 0 then
+        self.bs = f
+    end
 end
