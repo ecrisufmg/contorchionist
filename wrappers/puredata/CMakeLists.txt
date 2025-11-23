@@ -6,28 +6,34 @@ include(FetchContent)
 
 # --- Try to find Pure Data locally first ---
 if(NOT DEFINED PD_SOURCES_PATH)
-    find_path(PD_HEADER_PATH m_pd.h
-        HINTS
-        "/usr/include/pd"
-        "/usr/local/include/pd"
-        "$ENV{HOME}/pd-src/src"
-        "C:/Program Files/Pd/src"
-        "C:/Program Files/Pd64/src"
-        "/Applications/Pd.app/Contents/Resources/src"
-    )
-
-    if(PD_HEADER_PATH)
-        get_filename_component(PD_SOURCES_PATH ${PD_HEADER_PATH} DIRECTORY)
-        message(STATUS "Found local Pure Data source: ${PD_SOURCES_PATH}")
+    # Check for local submodule first
+    if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/pure-data/src/m_pd.h")
+        set(PD_SOURCES_PATH "${CMAKE_SOURCE_DIR}/third_party/pure-data/src" CACHE PATH "Path to local Pure Data submodule" FORCE)
+        message(STATUS "Found local Pure Data submodule: ${PD_SOURCES_PATH}")
     else()
-        message(STATUS "Pure Data source not found locally. Fetching from remote...")
-        FetchContent_Declare(
-            pd_source
-            GIT_REPOSITORY https://github.com/pure-data/pure-data.git
-            GIT_TAG 0.55-2
+        find_path(PD_HEADER_PATH m_pd.h
+            HINTS
+            "/usr/include/pd"
+            "/usr/local/include/pd"
+            "$ENV{HOME}/pd-src/src"
+            "C:/Program Files/Pd/src"
+            "C:/Program Files/Pd64/src"
+            "/Applications/Pd.app/Contents/Resources/src"
         )
-        FetchContent_MakeAvailable(pd_source)
-        set(PD_SOURCES_PATH "${pd_source_SOURCE_DIR}/src" CACHE PATH "Path to fetched Pure Data source" FORCE)
+
+        if(PD_HEADER_PATH)
+            get_filename_component(PD_SOURCES_PATH ${PD_HEADER_PATH} DIRECTORY)
+            message(STATUS "Found local Pure Data source: ${PD_SOURCES_PATH}")
+        else()
+            message(STATUS "Pure Data source not found locally. Fetching from remote...")
+            FetchContent_Declare(
+                pd_source
+                GIT_REPOSITORY https://github.com/pure-data/pure-data.git
+                GIT_TAG 0.55-2
+            )
+            FetchContent_MakeAvailable(pd_source)
+            set(PD_SOURCES_PATH "${pd_source_SOURCE_DIR}/src" CACHE PATH "Path to fetched Pure Data source" FORCE)
+        endif()
     endif()
 endif()
 
@@ -81,6 +87,50 @@ set(USE_PD_TORCH_UTILS FALSE)
 if(EXISTS "${PD_TORCH_UTILS_SRC}" AND IS_DIRECTORY "${PD_TORCH_UTILS_INCLUDE_DIR}")
     set(USE_PD_TORCH_UTILS TRUE)
     message(STATUS "Found pd_torch_utils utility, will be linked where needed.")
+endif()
+
+# --- Centralized Dependency Copy Target ---
+add_custom_target(pd_copy_dependencies ALL
+    COMMENT "Copying shared dependencies to ${PD_EXTERNAL_OUTPUT_DIR}"
+)
+
+# Copy contorchionist_core
+add_custom_command(
+    TARGET pd_copy_dependencies POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:contorchionist_core>
+    ${PD_EXTERNAL_OUTPUT_DIR}
+    COMMENT "Copying contorchionist_core shared library"
+)
+
+# Copy LibTorch libraries
+if(APPLE AND MACOS_TORCH_DYLIBS_FILENAMES)
+    foreach(dylib_filename ${MACOS_TORCH_DYLIBS_FILENAMES})
+        set(source_dylib_path "${Torch_INSTALL_PREFIX}/lib/${dylib_filename}")
+        if(EXISTS ${source_dylib_path})
+            add_custom_command(
+                TARGET pd_copy_dependencies POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${source_dylib_path}"
+                "${PD_EXTERNAL_OUTPUT_DIR}/${dylib_filename}"
+                COMMENT "Copying ${dylib_filename}"
+            )
+        endif()
+    endforeach()
+elseif(UNIX AND NOT APPLE AND LINUX_TORCH_SOS_FILENAMES)
+    # Handle Linux .so files
+    foreach(so_filename ${LINUX_TORCH_SOS_FILENAMES})
+        set(source_so_path "${Torch_INSTALL_PREFIX}/lib/${so_filename}")
+        if(EXISTS ${source_so_path})
+             add_custom_command(
+                TARGET pd_copy_dependencies POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${source_so_path}"
+                "${PD_EXTERNAL_OUTPUT_DIR}/${so_filename}"
+                COMMENT "Copying ${so_filename}"
+            )
+        endif()
+    endforeach()
 endif()
 
 # --- Reusable Function to Create a Pure Data External ---
@@ -163,18 +213,7 @@ function(add_puredata_external SOURCE_FILE PD_EXT_NAME)
     )
 
     # 9. Add dependencies to common library copy targets
-    # if(TARGET pd_copy_torch_libs)
-    #     add_dependencies(${CMAKE_TARGET_NAME} pd_copy_torch_libs)
-    # endif()
-
-    # if(TARGET pd_copy_contorchionist_core_lib)
-    #     add_dependencies(${CMAKE_TARGET_NAME} pd_copy_contorchionist_core_lib)
-    # endif()
-
-    copy_core_libs_to_wrapper_dist(
-        TARGET_NAME ${CMAKE_TARGET_NAME}
-        DIST_DIR ${PD_EXTERNAL_OUTPUT_DIR}
-    )
+    add_dependencies(${CMAKE_TARGET_NAME} pd_copy_dependencies)
 
     # 10. Link against pd_global_state for externals that need shared state
     set(EXTERNALS_NEEDING_GLOBAL_STATE "torch.activation" "torch.linear" "torch.mha" "torch.reshape" "torch.sequential" "torch.ls2tensor")
@@ -249,10 +288,7 @@ if(EXISTS "${PD_GLOBAL_STATE_SRC}")
         BUILD_WITH_INSTALL_RPATH TRUE
     )
 
-    copy_core_libs_to_wrapper_dist(
-        TARGET_NAME pd_global_state
-        DIST_DIR ${PD_EXTERNAL_OUTPUT_DIR}
-    )
+    add_dependencies(pd_global_state pd_copy_dependencies)
 
     message(STATUS "✓ pd_global_state library configured successfully")
     message(STATUS "  Output directory: ${PD_EXTERNAL_OUTPUT_DIR}")
