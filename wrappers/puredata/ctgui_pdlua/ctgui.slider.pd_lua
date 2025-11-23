@@ -40,8 +40,15 @@ function ctgui_slider:initialize(sel, atoms)
     self.width = parser:get_float("width w", 20)
     self.height = parser:get_float("height h", 120)
     
-    -- Orientation (inferred from dimensions)
-    self.orientation = (self.width > self.height) and "horizontal" or "vertical"
+    -- Orientation
+    if parser:has_flag("vert vertical") then
+        self.orientation = "vertical"
+    elseif parser:has_flag("horiz horizontal") then
+        self.orientation = "horizontal"
+    else
+        -- Inferred from dimensions
+        self.orientation = (self.width > self.height) and "horizontal" or "vertical"
+    end
 
     -- Mode
     local mode_str = parser:get_string("mode m", "lin")
