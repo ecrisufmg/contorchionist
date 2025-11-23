@@ -161,12 +161,18 @@ function ctguivulabel:postinitialize()
 end
 
 function ctguivulabel:paint(g)
+    -- Safety check
+    if not self.c_background then
+        self.c_background = {0, 0, 0.7}
+        if not self.c_text then self.c_text = {0, 0, 0} end
+    end
+
     -- Fundo
-    g:set_color(self.back_r, self.back_g, self.back_b)
+    g:set_color(self.c_background[1], self.c_background[2], self.c_background[3])
     g:fill_rect(0, 0, self.width-2, self.height-2)
     
     -- Cor do texto
-    g:set_color(self.text_r, self.text_g, self.text_b)
+    g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])
     
     if self.orientation == "vertical" then
         -- Vertical: labels empilhados (como lvu vertical)

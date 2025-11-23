@@ -663,6 +663,13 @@ end
 
 -- Desenha o VU meter
 function lnavu:paint(g)
+    -- Safety check for initialization failure
+    if not self.c_background then
+        self.c_background = {0, 0, 0.7} -- Default fallback
+        if not self.width then self.width = 200 end
+        if not self.height then self.height = 20 end
+    end
+
     -- Fundo da área total (afeta o label/scale se houver)
     g:set_color(self.c_background[1], self.c_background[2], self.c_background[3])
     g:fill_all()
@@ -704,8 +711,8 @@ end
 
 -- Desenha modo contínuo (original)
 function lnavu:paint_continuous_mode(g, visual_position)
-    local ox, oy = 1, 1
-    local w, h = self.width, self.height
+   local ox, oy = 2, 2
+    local w, h = self.width-3, self.height-2
 
     if self.orientation == "vertical" then
         -- VU Vertical (cresce de baixo para cima)
@@ -822,8 +829,8 @@ end
 
 -- Desenha modo contínuo multi-canal (sobrepostos com transparência)
 function lnavu:paint_continuous_mode_multichannel(g)
-    local ox, oy = 1, 1
-    local w, h = self.width, self.height
+   local ox, oy = 2, 2
+    local w, h = self.width-3, self.height-2
 
     -- Espaço para tags/números de canal
     local tag_space = 0
@@ -961,8 +968,8 @@ end
 
 -- Desenha modo LED (barras discretas)
 function lnavu:paint_led_mode(g, visual_position)
-    local ox, oy = 1, 1
-    local w, h = self.width, self.height
+   local ox, oy = 2, 2
+    local w, h = self.width-3, self.height-2
 
     -- LEDs dividem o espaço visual igualmente (não por dB)
     local led_visual_size = 1.0 / self.num_leds
@@ -1205,8 +1212,8 @@ end
 
 -- Desenha modo LED multi-canal (sobrepostos)
 function lnavu:paint_led_mode_multichannel(g)
-    local ox, oy = 1, 1
-    local w, h = self.width, self.height
+    local ox, oy = 2, 2
+    local w, h = self.width-3, self.height-2
 
     local led_visual_size = 1.0 / self.num_leds
     
@@ -1236,7 +1243,7 @@ function lnavu:paint_led_mode_multichannel(g)
         for ch = 1, self.num_channels do
             local visual_position = self:db_to_visual(self.channel_db[ch])
             local x_offset = ox + ((ch - 1) * (channel_width + channel_gap))
-            local led_padding = (self.num_channels > 1) and 1 or 0  -- padding lateral nos LEDs
+            local led_padding = (self.num_channels > 1) and 4 or 1  -- padding lateral nos LEDs
             
             for i = 0, self.num_leds - 1 do
                 local led_visual_min = i * led_visual_size
