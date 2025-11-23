@@ -226,6 +226,12 @@ function ctguivuscale:get_label_marks()
 end
 
 function ctguivuscale:paint(g)
+    -- Safety check
+    if not self.c_background then
+        self.c_background = {0, 0, 0.7}
+        if not self.c_text then self.c_text = {0, 0, 0} end
+    end
+
     -- Fundo
     g:set_color(self.c_background[1], self.c_background[2], self.c_background[3])
     g:fill_all()
