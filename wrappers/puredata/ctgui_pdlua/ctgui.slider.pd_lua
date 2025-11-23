@@ -424,6 +424,14 @@ end
 
 -- Input
 
+function ctgui_slider:in_1_list(atoms)
+    if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
+        self:in_1_float(atoms[1])
+    elseif type(atoms) == "number" then
+        self:in_1_float(atoms)
+    end
+end
+
 function ctgui_slider:in_1_float(f)
     self.current_value = math.max(self.min_val, math.min(self.max_val, f))
     self:update_visual_from_value()
@@ -439,6 +447,14 @@ function ctgui_slider:in_1_set(f)
     self.current_value = math.max(self.min_val, math.min(self.max_val, f))
     self:update_visual_from_value()
     self:throttled_repaint()
+end
+
+function ctgui_slider:in_2_list(atoms)
+    if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
+        self:in_2_float(atoms[1])
+    elseif type(atoms) == "number" then
+        self:in_2_float(atoms)
+    end
 end
 
 function ctgui_slider:in_2_float(f)
@@ -582,7 +598,7 @@ function ctgui_slider:paint(g)
         if not self.c_mark then self.c_mark = {128, 128, 128} end
         g:set_color(self.c_mark[1], self.c_mark[2], self.c_mark[3])
         local zero_vis = self:value_to_visual(0)
-        local handle_thickness = self.handle_size
+        local handle_thickness = self.handle_size or 10
         
         if self.orientation == "vertical" then
             local track_len = self.height - handle_thickness
@@ -600,7 +616,7 @@ function ctgui_slider:paint(g)
     -- Handle
     g:set_color(self.c_handle[1], self.c_handle[2], self.c_handle[3])
     
-    local handle_thickness = self.handle_size -- Pixel size along the axis
+    local handle_thickness = self.handle_size or 10 -- Pixel size along the axis
     
     if self.orientation == "vertical" then
         -- Visual pos 0 is bottom, 1 is top
