@@ -701,7 +701,7 @@ static void *torch_arr_player_new(t_symbol *s, int argc, t_atom *argv) {
     x->x_array_sizes.resize(x->x_n_channels, 0);
 
     for (int i = 0; i < x->x_n_channels; ++i) {
-        std::string name = x->x_array_basename + "_" + std::to_string(i);
+        std::string name = x->x_array_basename + "-" + std::to_string(i);
         x->x_array_names[i] = gensym(name.c_str());
     }
 

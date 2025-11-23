@@ -353,6 +353,29 @@ else()
     endif()
 endif()
 
+# --- Global Abs Directory Copy ---
+set(ABS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/abs")
+
+if(IS_DIRECTORY "${ABS_SOURCE_DIR}" AND NOT TARGET pd_copy_all_abs_files)
+    add_custom_target(pd_copy_all_abs_files ALL
+        COMMENT "Preparing to copy entire abs directory to ${PD_EXTERNAL_OUTPUT_DIR}"
+    )
+
+    # Copy the entire abs directory structure to the output directory
+    add_custom_command(
+        TARGET pd_copy_all_abs_files POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${ABS_SOURCE_DIR}" "${PD_EXTERNAL_OUTPUT_DIR}"
+        COMMENT "Copying entire abs directory structure from ${ABS_SOURCE_DIR} to ${PD_EXTERNAL_OUTPUT_DIR}"
+        VERBATIM
+    )
+
+    message(STATUS "Configured global copy of entire abs directory structure from ${ABS_SOURCE_DIR} to ${PD_EXTERNAL_OUTPUT_DIR}")
+else()
+    if(NOT IS_DIRECTORY "${ABS_SOURCE_DIR}")
+        message(WARNING "Abs directory not found: ${ABS_SOURCE_DIR}")
+    endif()
+endif()
+
 # --- Copy ctgui_pdlua to dist/ctgui ---
 set(CTGUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ctgui_pdlua")
 set(CTGUI_DIST_DIR "${PROJECT_DIST_DIR}/puredata/ctgui")
