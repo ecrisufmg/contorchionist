@@ -37,8 +37,8 @@ function ctgui_rslider:initialize(sel, atoms)
     local parser = ArgParser:new(atoms)
 
     -- Dimensions
-    self.width = parser:get_float("width w", 20)
-    self.height = parser:get_float("height h", 120)
+    self.width = parser:get_float("width w", 130)
+    self.height = parser:get_float("height h", 20)
     
     -- Orientation
     if parser:has_flag("vert vertical") then
@@ -684,34 +684,73 @@ function ctgui_rslider:paint(g)
         end
     end
 
-    -- Handle (Range Bar)
-    g:set_color(self.c_handle[1], self.c_handle[2], self.c_handle[3])
+        -- Handle (Range Bar)
+    local max_dim = (self.orientation == "vertical") and self.width or self.height
+    -- Reduce handler size slightly (80% of available space)
+    local handle_size = (max_dim - 4) * 0.66
+    if handle_size < 4 then handle_size = 4 end
     
-    local v_low = math.min(self.vis_low, self.vis_high)
-    local v_high = math.max(self.vis_low, self.vis_high)
+    -- Bar thickness based on ratio 1:1.3 (Handler is 1.3x Bar)
+    local bar_thickness = handle_size / 1.3
+    
+    local radius = handle_size / 2
+    
+    local v_min = math.min(self.vis_low, self.vis_high)
+    local v_max = math.max(self.vis_low, self.vis_high)
+
+    -- Darker color for the connecting bar
+    local bar_r, bar_g, bar_b
+    if self.c_handle.h then
+        bar_r, bar_g, bar_b = Colors.hsb(self.c_handle.h, self.c_handle.s, self.c_handle.b * 0.7)
+    else
+        bar_r = self.c_handle[1] * 0.7
+        bar_g = self.c_handle[2] * 0.7
+        bar_b = self.c_handle[3] * 0.7
+    end
     
     if self.orientation == "vertical" then
-        local y_bottom = self.height - (v_low * self.height)
-        local y_top = self.height - (v_high * self.height)
+        local track_len = self.height - handle_size
         
-        -- Ensure min height for visibility
-        if math.abs(y_bottom - y_top) < 2 then
-            y_top = y_top - 1
-            y_bottom = y_bottom + 1
-        end
+        -- Positions (0 is bottom in visual logic, but height in pixels)
+        local y_low = (self.height - handle_size) - (v_min * track_len) -- Lower value -> Higher Y (bottom)
+        local y_high = (self.height - handle_size) - (v_max * track_len) -- Higher value -> Lower Y (top)
         
-        g:fill_rounded_rect(2, y_top, self.width - 4, y_bottom - y_top, 2)
+        -- Centering
+        local center_x = self.width / 2
+        local bar_x = center_x - (bar_thickness / 2)
+        local handle_x = center_x - (handle_size / 2)
+        
+        -- Draw Connecting Bar (Behind)
+        g:set_color(bar_r, bar_g, bar_b)
+        local bar_top = y_high + (handle_size / 2)
+        local bar_bottom = y_low + (handle_size / 2)
+        g:fill_rect(bar_x, bar_top, bar_thickness, bar_bottom - bar_top)
+
+        -- Draw Handlers
+        g:set_color(self.c_handle[1], self.c_handle[2], self.c_handle[3])
+        g:fill_rounded_rect(handle_x, y_low, handle_size, handle_size, radius)
+        g:fill_rounded_rect(handle_x, y_high, handle_size, handle_size, radius)
     else
-        local x_left = v_low * self.width
-        local x_right = v_high * self.width
+        local track_len = self.width - handle_size
         
-        -- Ensure min width for visibility
-        if math.abs(x_right - x_left) < 2 then
-            x_left = x_left - 1
-            x_right = x_right + 1
-        end
+        local x_low = v_min * track_len
+        local x_high = v_max * track_len
         
-        g:fill_rounded_rect(x_left, 2, x_right - x_left, self.height - 4, 2)
+        -- Centering
+        local center_y = self.height / 2
+        local bar_y = center_y - (bar_thickness / 2)
+        local handle_y = center_y - (handle_size / 2)
+        
+        -- Draw Connecting Bar (Behind)
+        g:set_color(bar_r, bar_g, bar_b)
+        local bar_left = x_low + (handle_size / 2)
+        local bar_right = x_high + (handle_size / 2)
+        g:fill_rect(bar_left, bar_y, bar_right - bar_left, bar_thickness)
+
+        -- Draw Handlers
+        g:set_color(self.c_handle[1], self.c_handle[2], self.c_handle[3])
+        g:fill_rounded_rect(x_low, handle_y, handle_size, handle_size, radius)
+        g:fill_rounded_rect(x_high, handle_y, handle_size, handle_size, radius)
     end
 end
 
