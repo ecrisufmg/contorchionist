@@ -43,7 +43,7 @@ message(STATUS "  PD_EXTERNAL_SUFFIX: ${PD_EXTERNAL_SUFFIX}")
 # --- Common Setup & Utility Definitions ---
 
 # Define a single output directory for all externals
-set(PD_EXTERNAL_OUTPUT_DIR "${PROJECT_DIST_DIR}/puredata")
+set(PD_EXTERNAL_OUTPUT_DIR "${PROJECT_DIST_DIR}/puredata/contorchionistSN")
 file(MAKE_DIRECTORY ${PD_EXTERNAL_OUTPUT_DIR})
 
 # Define RPATH logic once
@@ -319,7 +319,7 @@ endif()
 
 # --- Copy ctgui_pdlua to dist/ctgui ---
 set(CTGUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ctgui_pdlua")
-set(CTGUI_DIST_DIR "${PROJECT_DIST_DIR}/ctgui")
+set(CTGUI_DIST_DIR "${PROJECT_DIST_DIR}/puredata/ctgui")
 
 if(IS_DIRECTORY "${CTGUI_SOURCE_DIR}" AND NOT TARGET pd_copy_ctgui)
     add_custom_target(pd_copy_ctgui ALL

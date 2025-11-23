@@ -400,10 +400,10 @@ endif()
 set(RESOURCES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/resources)
 if(EXISTS ${RESOURCES_DIR})
     set(WRAPPER_DIST_DIRS
-        ${PROJECT_DIST_DIR}/puredata
-        ${PROJECT_DIST_DIR}/max
-        ${PROJECT_DIST_DIR}/supercollider
-        ${PROJECT_DIST_DIR}/python
+        ${PROJECT_DIST_DIR}/puredata/contorchionistSN
+        ${PROJECT_DIST_DIR}/max/contorchionistSN
+        ${PROJECT_DIST_DIR}/supercollider/contorchionistSN
+        ${PROJECT_DIST_DIR}/python/contorchionistSN
     )
 
     # Create a single target that handles all resource copying
@@ -446,15 +446,17 @@ file(WRITE "${CMAKE_BINARY_DIR}/install_puredata.cmake"
 "message(STATUS \"Running install-puredata script...\")\n"
 "if(EXISTS \"${PD_USER_PDDIR}\")\n"
 "  message(STATUS \"Found target Pd externals dir: ${PD_USER_PDDIR} - copying distribution...\")\n"
-"  file(COPY \"${PD_OUTPUT_DIR}/\" DESTINATION \"${PD_USER_PDDIR}/conTorchionistSN\")\n"
-"  message(STATUS \"Copied ${PD_OUTPUT_DIR} to ${PD_USER_PDDIR}/conTorchionistSN\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/contorchionistSN\" DESTINATION \"${PD_USER_PDDIR}\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/ctgui\" DESTINATION \"${PD_USER_PDDIR}\")\n"
+"  message(STATUS \"Copied distribution to ${PD_USER_PDDIR}\")\n"
 "else()\n"
 "  message(STATUS \"Pd externals dir ${PD_USER_PDDIR} not found; skipping copy\")\n"
 "endif()\n"
 "if(EXISTS \"${PLUGDATA_USER_DIR}\")\n"
 "  message(STATUS \"Found target PlugData externals dir: ${PLUGDATA_USER_DIR} - copying distribution...\")\n"
-"  file(COPY \"${PD_OUTPUT_DIR}/\" DESTINATION \"${PLUGDATA_USER_DIR}/conTorchionistSN\")\n"
-"  message(STATUS \"Copied ${PD_OUTPUT_DIR} to ${PLUGDATA_USER_DIR}/conTorchionistSN\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/contorchionistSN\" DESTINATION \"${PLUGDATA_USER_DIR}\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/ctgui\" DESTINATION \"${PLUGDATA_USER_DIR}\")\n"
+"  message(STATUS \"Copied distribution to ${PLUGDATA_USER_DIR}\")\n"
 "else()\n"
 "  message(STATUS \"PlugData externals dir ${PLUGDATA_USER_DIR} not found; skipping copy\")\n"
 "endif()\n")
@@ -470,13 +472,21 @@ add_custom_target(install-puredata
 # Instala em Pure Data se o diretório existir
 if(EXISTS ${PD_USER_PDDIR})
     message(STATUS "Instalação habilitada para: ${PD_USER_PDDIR}")
-    install(DIRECTORY ${PD_OUTPUT_DIR}/
-            DESTINATION ${PD_USER_PDDIR}/conTorchionistSN
+    install(DIRECTORY ${PD_OUTPUT_DIR}/contorchionistSN
+            DESTINATION ${PD_USER_PDDIR}
+            USE_SOURCE_PERMISSIONS
+            COMPONENT pd_externals)
+    install(DIRECTORY ${PD_OUTPUT_DIR}/ctgui
+            DESTINATION ${PD_USER_PDDIR}
             USE_SOURCE_PERMISSIONS
             COMPONENT pd_externals)
     # Também adiciona ao componente 'all'
-    install(DIRECTORY ${PD_OUTPUT_DIR}/
-            DESTINATION ${PD_USER_PDDIR}/conTorchionistSN
+    install(DIRECTORY ${PD_OUTPUT_DIR}/contorchionistSN
+            DESTINATION ${PD_USER_PDDIR}
+            USE_SOURCE_PERMISSIONS
+            COMPONENT all)
+    install(DIRECTORY ${PD_OUTPUT_DIR}/ctgui
+            DESTINATION ${PD_USER_PDDIR}
             USE_SOURCE_PERMISSIONS
             COMPONENT all)
 else()
@@ -486,13 +496,21 @@ endif()
 # Instala em PlugData se o diretório existir
 if(EXISTS ${PLUGDATA_USER_DIR})
     message(STATUS "Instalação habilitada para: ${PLUGDATA_USER_DIR}")
-    install(DIRECTORY ${PD_OUTPUT_DIR}/
-            DESTINATION ${PLUGDATA_USER_DIR}/conTorchionistSN
+    install(DIRECTORY ${PD_OUTPUT_DIR}/contorchionistSN
+            DESTINATION ${PLUGDATA_USER_DIR}
+            USE_SOURCE_PERMISSIONS
+            COMPONENT plugdata_externals)
+    install(DIRECTORY ${PD_OUTPUT_DIR}/ctgui
+            DESTINATION ${PLUGDATA_USER_DIR}
             USE_SOURCE_PERMISSIONS
             COMPONENT plugdata_externals)
     # Também adiciona ao componente 'all'
-    install(DIRECTORY ${PD_OUTPUT_DIR}/
-            DESTINATION ${PLUGDATA_USER_DIR}/conTorchionistSN
+    install(DIRECTORY ${PD_OUTPUT_DIR}/contorchionistSN
+            DESTINATION ${PLUGDATA_USER_DIR}
+            USE_SOURCE_PERMISSIONS
+            COMPONENT all)
+    install(DIRECTORY ${PD_OUTPUT_DIR}/ctgui
+            DESTINATION ${PLUGDATA_USER_DIR}
             USE_SOURCE_PERMISSIONS
             COMPONENT all)
 else()
