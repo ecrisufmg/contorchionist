@@ -393,8 +393,8 @@ function thisobj:in_1_stop()
     self.state = "stop"
     self.position = 0
     self:repaint()
-    self:outlet(1, "stop", {})
     self:output_position()
+    self:outlet(1, "stop", {})
 end
 
 function thisobj:in_1_list(atoms)
