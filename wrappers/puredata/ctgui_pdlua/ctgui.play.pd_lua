@@ -34,8 +34,8 @@ function thisobj:initialize(sel, atoms)
     self.duration = parser:get_float("duration d", 0.0)
 
     -- FPS / Shutter (GUI)
-    local gui_fps = parser:get_float("guifps", parser:get_float("guishutter", parser:get_float("fps", parser:get_float("shutter", 60))))
-    self.gui_fps = (gui_fps > 0) and gui_fps or 60
+    local gui_fps = parser:get_float("guifps", parser:get_float("guishutter", parser:get_float("fps", parser:get_float("shutter", 20))))
+    self.gui_fps = (gui_fps > 0) and gui_fps or 20
     
     self.repaint_clock = pd.Clock:new():register(self, "repaint_tick")
     self.repaint_clock_running = false
