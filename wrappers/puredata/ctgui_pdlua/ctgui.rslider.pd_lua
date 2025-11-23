@@ -517,6 +517,8 @@ function ctgui_rslider:in_1_list(atoms)
         self:update_visual_from_value()
         self:throttled_repaint()
         self:output_value()
+    elseif #atoms == 1 and type(atoms[1]) == "number" then
+        self:in_1_float(atoms[1])
     end
 end
 

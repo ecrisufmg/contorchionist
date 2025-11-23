@@ -413,6 +413,12 @@ function thisobj:in_1_stop()
     self:output_position()
 end
 
+function thisobj:in_1_list(atoms)
+    if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
+        self:in_1_float(atoms[1])
+    end
+end
+
 function thisobj:in_1_float(f)
     if f == 0 then self:in_1_stop()
     elseif f == 1 then self:in_1_play()
