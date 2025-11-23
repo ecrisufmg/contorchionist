@@ -871,19 +871,19 @@ function lnavu:paint_led_mode(g, visual_position)
     
     -- Calcula o gap baseado no tamanho disponível
     local gap = 2  -- gap padrão em pixels
-    local corner_radius = 3  -- Raio dos cantos arredondados padrão
+    local corner_radius = 1  -- Raio dos cantos arredondados padrão
     local use_rounded = true
     
     if self.orientation == "vertical" then
         -- Verifica se os LEDs ficariam muito pequenos
         local led_pixel_height = (self.height - 4) / self.num_leds - gap
-        if led_pixel_height < 3 then
+        if led_pixel_height < 1 then
             gap = 0
             use_rounded = false
         end
     else
         local led_pixel_width = (self.width - 4) / self.num_leds - gap
-        if led_pixel_width < 3 then
+        if led_pixel_width < 1 then
             gap = 0
             use_rounded = false
         end
@@ -1126,7 +1126,7 @@ function lnavu:paint_led_mode_multichannel(g)
         local channel_width = (self.width - 4 - total_gap) / self.num_channels
         local led_pixel_height = (self.height - 4 - tag_space) / self.num_leds - gap
         
-        if led_pixel_height < 3 then
+        if led_pixel_height < 1 then
             gap = 0
             use_rounded = false
         end
@@ -1288,6 +1288,23 @@ end
 
 function lnavu:in_1_shutter(atoms)
     self:in_1_guifps(atoms)
+end
+
+-- Método para alterar número de LEDs em tempo real
+function lnavu:in_1_leds(atoms)
+    local n = type(atoms) == "table" and atoms[1] or atoms
+    if type(n) == "number" then
+        -- Mínimo 3 LEDs, converte para inteiro
+        self.num_leds = math.max(3, math.floor(n))
+        self.led_mode = true
+        
+        -- Recalcula zero_visual
+        local led_size = 1.0 / self.num_leds
+        local target_leds = math.floor(0.85 / led_size + 0.5)
+        self.zero_visual = target_leds * led_size
+        
+        self:repaint()
+    end
 end
 
 -- Gera o comando de instanciação para copiar
