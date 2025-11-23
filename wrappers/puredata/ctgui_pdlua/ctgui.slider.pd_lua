@@ -24,11 +24,13 @@ local ctgui_slider = pd.Class:new():register("ctgui.slider")
 
 -- Default Colors (HSB)
 local C_BG_LIGHT = {0, 0, 0.9}
-local C_BG_DARK = {0, 0, 0.3}
+local C_BG_DARK = {0, 0, 0.35}
 local C_SLOT_LIGHT = {0, 0, 0.7}
 local C_SLOT_DARK = {0, 0, 0.2}
 local C_HANDLE_LIGHT = {0, 0, 0.45}
-local C_HANDLE_DARK = {0, 0, 0.55}
+local C_HANDLE_DARK = {0, 0, 0.75}
+local C_MARK_LIGHT = {0, 0, 0.6}
+local C_MARK_DARK = {0, 0, 0.6}
 
 function ctgui_slider:initialize(sel, atoms)
     self.creation_args = atoms
@@ -165,6 +167,7 @@ function ctgui_slider:initialize(sel, atoms)
     self.c_bg = get_color_flexible({"bgcolor", "bg"}, is_dark and C_BG_DARK or C_BG_LIGHT)
     self.c_slot = get_color_flexible({"slotcolor", "trackcolor"}, is_dark and C_SLOT_DARK or C_SLOT_LIGHT)
     self.c_handle = get_color_flexible({"color", "handlecolor"}, is_dark and C_HANDLE_DARK or C_HANDLE_LIGHT)
+    self.c_mark = get_color_flexible({"markcolor", "mark"}, is_dark and C_MARK_DARK or C_MARK_LIGHT)
 
     -- FPS
     local gui_fps = parser:get_float("guifps guishutter fps shutter", 20)
@@ -454,6 +457,26 @@ function ctgui_slider:paint(g)
         local slot_height = 4
         local slot_y = (self.height - slot_height) / 2
         g:fill_rounded_rect(4, slot_y, self.width - 8, slot_height, 2)
+    end
+
+    -- 0dB Mark
+    if self.mode == "db" and self.min_val <= 0 and self.max_val >= 0 then
+        if not self.c_mark then self.c_mark = {128, 128, 128} end
+        g:set_color(self.c_mark[1], self.c_mark[2], self.c_mark[3])
+        local zero_vis = self:value_to_visual(0)
+        local handle_thickness = 10
+        
+        if self.orientation == "vertical" then
+            local track_len = self.height - handle_thickness
+            local mark_y = (self.height - handle_thickness) - (zero_vis * track_len) + (handle_thickness / 2)
+            -- Draw horizontal line
+            g:fill_rect(2, mark_y, self.width - 4, 1)
+        else
+            local track_len = self.width - handle_thickness
+            local mark_x = (zero_vis * track_len) + (handle_thickness / 2)
+            -- Draw vertical line
+            g:fill_rect(mark_x, 2, 1, self.height - 4)
+        end
     end
 
     -- Handle
