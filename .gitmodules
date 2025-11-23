@@ -10,3 +10,6 @@
 [submodule "third_party/libsndfile"]
 	path = third_party/libsndfile
 	url = https://github.com/libsndfile/libsndfile.git
+[submodule "third_party/pure-data"]
+	path = third_party/pure-data
+	url = https://github.com/pure-data/pure-data.git
