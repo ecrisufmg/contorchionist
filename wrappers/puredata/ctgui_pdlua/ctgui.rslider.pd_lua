@@ -67,15 +67,16 @@ function ctgui_rslider:initialize(sel, atoms)
     self.max_val = parser:get_float("max maximum", default_max)
 
     -- Initial Values
-    local init_low = 0.0
-    local init_high = 0.0
+    local default_init = (self.mode == "db") and self.min_val or 0.0
+    local init_low = default_init
+    local init_high = default_init
     
     -- Check for flags
     if parser:has_flag("low lo") then
-        init_low = parser:get_float("low lo", 0.0)
+        init_low = parser:get_float("low lo", default_init)
     end
     if parser:has_flag("high hi") then
-        init_high = parser:get_float("high hi", 0.0)
+        init_high = parser:get_float("high hi", default_init)
     end
     
     -- Clamp to min/max
