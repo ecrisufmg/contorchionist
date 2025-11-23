@@ -439,6 +439,38 @@ function ctgui_slider:in_2_float(f)
     self:throttled_repaint()
 end
 
+-- Dynamic Configuration
+
+function ctgui_slider:in_1_guifps(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" and f > 0 then
+        self.gui_fps = f
+    end
+end
+
+function ctgui_slider:in_1_guishutter(atoms)
+    self:in_1_guifps(atoms)
+end
+
+function ctgui_slider:in_1_fps(atoms)
+    self:in_1_guifps(atoms)
+end
+
+function ctgui_slider:in_1_shutter(atoms)
+    self:in_1_guifps(atoms)
+end
+
+function ctgui_slider:in_1_datafps(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" then
+        self.data_fps = (f > 0) and f or 0
+    end
+end
+
+function ctgui_slider:in_1_datashutter(atoms)
+    self:in_1_datafps(atoms)
+end
+
 -- Output Throttling
 
 function ctgui_slider:output_value()
