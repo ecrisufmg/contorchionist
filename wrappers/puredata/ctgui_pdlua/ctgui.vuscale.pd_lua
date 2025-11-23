@@ -19,8 +19,16 @@
 --   @dbvals - Lista customizada de valores de dB (ex: @dbvals 0 -6 -12 -24)
 
 local ArgParser = require("pd_arg_parser")
+local Colors = require("colors")
 
 local ctguivuscale = pd.Class:new():register("ctgui.vuscale")
+
+-- Default Colors (HSB 0-1 scale)
+local C_TEXT_LIGHT = {0, 0, 0.2}
+local C_BG_LIGHT = {0, 0, 0.93}
+
+local C_TEXT_DARK = {0, 0, 0.8}
+local C_BG_DARK = {0, 0, 0.2}
 
 function ctguivuscale:initialize(sel, atoms)
     -- Parse argumentos
@@ -61,29 +69,78 @@ function ctguivuscale:initialize(sel, atoms)
     -- Tamanho de fonte (auto se 0)
     self.font_size = parser:get_float("fontsize fs", 0)
     
-    -- Cor do texto
-    local textrgb = parser:get_float_list("colorrgb color_rgb textrgb text_rgb")
-    if textrgb and #textrgb >= 3 then
-        self.text_r = math.max(0, math.min(255, textrgb[1]))
-        self.text_g = math.max(0, math.min(255, textrgb[2]))
-        self.text_b = math.max(0, math.min(255, textrgb[3]))
-    else
-        self.text_r = 200
-        self.text_g = 200
-        self.text_b = 200
-    end
+    -- Parse Colors
     
-    -- Cor de fundo
-    local backrgb = parser:get_float_list("backrgb back_rgb bgcolor bg_color bg")
-    if backrgb and #backrgb >= 3 then
-        self.back_r = math.max(0, math.min(255, backrgb[1]))
-        self.back_g = math.max(0, math.min(255, backrgb[2]))
-        self.back_b = math.max(0, math.min(255, backrgb[3]))
-    else
-        self.back_r = 50
-        self.back_g = 50
-        self.back_b = 50
+    -- Helper: RGB to HSB (0-1)
+    local function rgb_to_hsb(r, g, b)
+        local max = math.max(r, g, b)
+        local min = math.min(r, g, b)
+        local delta = max - min
+        local h, s, v = 0, 0, max
+
+        if max > 0 then s = delta / max else s = 0 end
+        
+        if delta > 0 then
+            if r == max then h = (g - b) / delta
+            elseif g == max then h = 2 + (b - r) / delta
+            else h = 4 + (r - g) / delta end
+            h = h * 60
+            if h < 0 then h = h + 360 end
+            h = h / 360
+        end
+        return h, s, v
     end
+
+    -- Helper to get color from flags (RGB or HSB) or default
+    local function get_color(name, default_hsb, legacy_aliases)
+        -- Check for @namecolor (e.g. @textcolor)
+        local val = parser:get_value(name .. "color")
+        
+        -- If not found, check legacy aliases (e.g. @colorrgb)
+        if val == nil and legacy_aliases then
+            local leg = parser:get_float_list(legacy_aliases)
+            if leg and #leg >= 3 then
+                val = {"rgb", leg[1], leg[2], leg[3]}
+            end
+        end
+        
+        local h, s, b = default_hsb[1], default_hsb[2], default_hsb[3]
+        local source = "default"
+
+        if type(val) == "table" then
+            -- Check for format: {"rgb", r, g, b} or {"hsb", h, s, b}
+            if type(val[1]) == "string" then
+                local mode = val[1]
+                if (mode == "rgb" or mode == "RGB") and #val >= 4 then
+                    h, s, b = rgb_to_hsb(val[2], val[3], val[4])
+                    source = "rgb"
+                elseif (mode == "hsb" or mode == "HSB" or mode == "hsl" or mode == "HSL") and #val >= 4 then
+                    h, s, b = val[2], val[3], val[4]
+                    source = "hsb"
+                end
+            -- Check for format: {r, g, b} (implicit RGB)
+            elseif type(val[1]) == "number" and #val >= 3 then
+                h, s, b = rgb_to_hsb(val[1], val[2], val[3])
+                source = "rgb"
+            end
+        end
+
+        -- Convert to RGB (0-255) for drawing
+        local r, g, b_val = Colors.hsb(h, s, b)
+        return {r, g, b_val, source=source, h=h, s=s, b=b}
+    end
+
+    -- Dark Mode Defaults
+    local def_text = C_TEXT_LIGHT
+    local def_bg = C_BG_LIGHT
+
+    if parser:get_bool("dark") then
+        def_text = C_TEXT_DARK
+        def_bg = C_BG_DARK
+    end
+
+    self.c_text = get_color("text", def_text, "colorrgb color_rgb textrgb text_rgb")
+    self.c_background = get_color("bg", def_bg, "backrgb back_rgb bgcolor bg_color bg")
     
     -- Inlets/Outlets
     self.inlets = 1
@@ -170,17 +227,11 @@ end
 
 function ctguivuscale:paint(g)
     -- Fundo
-    local back_r = self.back_r or 50
-    local back_g = self.back_g or 50
-    local back_b = self.back_b or 50
-    g:set_color(back_r, back_g, back_b)
+    g:set_color(self.c_background[1], self.c_background[2], self.c_background[3])
     g:fill_all()
     
     -- Cor do texto
-    local text_r = self.text_r or 200
-    local text_g = self.text_g or 200
-    local text_b = self.text_b or 200
-    g:set_color(text_r, text_g, text_b)
+    g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])
     
     local marks = self:get_label_marks()
     
@@ -216,7 +267,7 @@ function ctguivuscale:paint(g)
         
         for _, db in ipairs(marks) do
             local visual_pos = self:db_to_visual(db)
-            local y = (self.height - 2) - (visual_pos * (self.height - 4))
+            local y = self.height - (visual_pos * self.height)
             
             -- Linha horizontal pequena (marcador) - opcional, pode remover se poluir
             -- g:fill_rect(0, y, 3, 1)
@@ -241,7 +292,7 @@ function ctguivuscale:paint(g)
         -- Horizontal: texto abaixo ou centralizado
         for _, db in ipairs(marks) do
             local visual_pos = self:db_to_visual(db)
-            local x = 2 + (visual_pos * (self.width - 4))
+            local x = (visual_pos * self.width)
             
             -- Linha vertical pequena (marcador)
             g:fill_rect(x, 0, 1, 3)

@@ -32,8 +32,19 @@
 
 -- Importa o ArgParser externo
 local ArgParser = require("pd_arg_parser")
+local Colors = require("colors")
 
 local lnavu = pd.Class:new():register("ctgui.vu")
+
+-- Default Colors (HSB 0-1 scale)
+local C_TEXT_LIGHT = {0, 0, 0}
+local C_BG_LIGHT = {0, 0, 0.7}
+
+local C_TEXT_DARK = {0, 0, 0.9}
+local C_BG_DARK = {0, 0, 0.3}
+
+-- Fixed Meter Background (Always Dark)
+local C_METER_BG = {0, 0, 0.12}
 
 function lnavu:initialize(sel, atoms)
     -- Parse argumentos primeiro para saber quantos canais
@@ -129,29 +140,78 @@ function lnavu:initialize(sel, atoms)
     self._raw_repaint = self.repaint
     self.repaint = self.throttled_repaint
     
-    -- Cor de fundo (padrão cinza 50 50 50)
-    local backrgb = parser:get_float_list("backrgb back_rgb bgcolor bg_color bg")
-    if backrgb and #backrgb >= 3 then
-        self.back_r = math.max(0, math.min(255, backrgb[1]))
-        self.back_g = math.max(0, math.min(255, backrgb[2]))
-        self.back_b = math.max(0, math.min(255, backrgb[3]))
-    else
-        self.back_r = 50
-        self.back_g = 50
-        self.back_b = 50
-    end
+    -- Parse Colors
     
-    -- Cor da escala (texto de dB)
-    local scalergb = parser:get_float_list("scalecolorrgb scale_color_rgb scalecolor")
-    if scalergb and #scalergb >= 3 then
-        self.scale_r = math.max(0, math.min(255, scalergb[1]))
-        self.scale_g = math.max(0, math.min(255, scalergb[2]))
-        self.scale_b = math.max(0, math.min(255, scalergb[3]))
-    else
-        self.scale_r = 200
-        self.scale_g = 200
-        self.scale_b = 200
+    -- Helper: RGB to HSB (0-1)
+    local function rgb_to_hsb(r, g, b)
+        local max = math.max(r, g, b)
+        local min = math.min(r, g, b)
+        local delta = max - min
+        local h, s, v = 0, 0, max
+
+        if max > 0 then s = delta / max else s = 0 end
+        
+        if delta > 0 then
+            if r == max then h = (g - b) / delta
+            elseif g == max then h = 2 + (b - r) / delta
+            else h = 4 + (r - g) / delta end
+            h = h * 60
+            if h < 0 then h = h + 360 end
+            h = h / 360
+        end
+        return h, s, v
     end
+
+    -- Helper to get color from flags (RGB or HSB) or default
+    local function get_color(name, default_hsb, legacy_aliases)
+        -- Check for @namecolor (e.g. @textcolor)
+        local val = parser:get_value(name .. "color")
+        
+        -- If not found, check legacy aliases (e.g. @colorrgb)
+        if val == nil and legacy_aliases then
+            local leg = parser:get_float_list(legacy_aliases)
+            if leg and #leg >= 3 then
+                val = {"rgb", leg[1], leg[2], leg[3]}
+            end
+        end
+        
+        local h, s, b = default_hsb[1], default_hsb[2], default_hsb[3]
+        local source = "default"
+
+        if type(val) == "table" then
+            -- Check for format: {"rgb", r, g, b} or {"hsb", h, s, b}
+            if type(val[1]) == "string" then
+                local mode = val[1]
+                if (mode == "rgb" or mode == "RGB") and #val >= 4 then
+                    h, s, b = rgb_to_hsb(val[2], val[3], val[4])
+                    source = "rgb"
+                elseif (mode == "hsb" or mode == "HSB" or mode == "hsl" or mode == "HSL") and #val >= 4 then
+                    h, s, b = val[2], val[3], val[4]
+                    source = "hsb"
+                end
+            -- Check for format: {r, g, b} (implicit RGB)
+            elseif type(val[1]) == "number" and #val >= 3 then
+                h, s, b = rgb_to_hsb(val[1], val[2], val[3])
+                source = "rgb"
+            end
+        end
+
+        -- Convert to RGB (0-255) for drawing
+        local r, g, b_val = Colors.hsb(h, s, b)
+        return {r, g, b_val, source=source, h=h, s=s, b=b}
+    end
+
+    -- Dark Mode Defaults
+    local def_text = C_TEXT_LIGHT
+    local def_bg = C_BG_LIGHT
+
+    if parser:get_bool("dark") then
+        def_text = C_TEXT_DARK
+        def_bg = C_BG_DARK
+    end
+
+    self.c_text = get_color("text", def_text, "scalecolorrgb scale_color_rgb scalecolor")
+    self.c_background = get_color("bg", def_bg, "backrgb back_rgb bgcolor bg_color bg")
     
     -- Estado atual
     self.current_db = self.db_min
@@ -188,8 +248,8 @@ end
 function lnavu:postinitialize()
     -- Define o tamanho visual do objeto
     -- Se tem label, adiciona espaço extra
-    local display_width = self.width - 2
-    local display_height = self.height - 2
+    local display_width = self.width
+    local display_height = self.height
     
     if self.show_label then
         if self.orientation == "vertical" then
@@ -581,9 +641,14 @@ end
 
 -- Desenha o VU meter
 function lnavu:paint(g)
-    -- Fundo com cor configurável
-    g:set_color(self.back_r, self.back_g, self.back_b)
+    -- Fundo da área total (afeta o label/scale se houver)
+    g:set_color(self.c_background[1], self.c_background[2], self.c_background[3])
     g:fill_all()
+    
+    -- Fundo da área do medidor (sempre escuro para contraste com LEDs)
+    local mr, mg, mb = Colors.hsb(C_METER_BG[1], C_METER_BG[2], C_METER_BG[3])
+    g:set_color(mr, mg, mb)
+    g:fill_rect(0, 0, self.width, self.height)
     
     -- Usa função de transferência não-linear para posição visual
     if self.num_channels > 1 then
@@ -606,8 +671,8 @@ function lnavu:paint(g)
     end
     
     -- Borda
-    g:set_color(180, 180, 180)
-    g:stroke_rect(0, 0, self.width, self.height, 1)
+    -- g:set_color(180, 180, 180)
+    -- g:stroke_rect(0, 0, self.width, self.height, 1)
     
     -- Desenha legenda se ativada
     if self.show_label then
@@ -619,7 +684,7 @@ end
 function lnavu:paint_continuous_mode(g, visual_position)
     if self.orientation == "vertical" then
         -- VU Vertical (cresce de baixo para cima)
-        local bar_height = visual_position * (self.height - 4)
+        local bar_height = visual_position * self.height
         
         -- Desenha gradiente de cores
         if bar_height > 0 then
@@ -627,7 +692,7 @@ function lnavu:paint_continuous_mode(g, visual_position)
             local segment_height = bar_height / segments
             
             for i = 0, segments - 1 do
-                local y = (self.height - 2) - ((i + 1) * segment_height)  -- De baixo para cima
+                local y = self.height - ((i + 1) * segment_height)  -- De baixo para cima
                 local h = segment_height
                 
                 -- Calcula a posição visual normalizada deste segmento
@@ -639,24 +704,24 @@ function lnavu:paint_continuous_mode(g, visual_position)
                 -- Obtém cor para este dB
                 local cr, cg, cb = self:get_color_for_db(seg_db)
                 g:set_color(cr, cg, cb)
-                g:fill_rect(2, y, self.width - 4, h)
+                g:fill_rect(0, y, self.width, h)
             end
         end
         
         -- Desenha linha de pico
         if self.peak_db > self.db_min then
             local peak_visual = self:db_to_visual(self.peak_db)
-            local peak_y = (self.height - 2) - (peak_visual * (self.height - 4))
+            local peak_y = self.height - (peak_visual * self.height)
             
             local pr, pg, pb = self:get_color_for_db(self.peak_db)
             g:set_color(pr, pg, pb)
-            g:fill_rect(2, peak_y - 1, self.width - 4, 2)
+            g:fill_rect(0, peak_y - 1, self.width, 2)
         end
         
         -- Desenha linha de referência em 0dB (sempre visível)
         if 0 >= self.db_min and 0 <= self.db_max then
             local zero_visual = self:db_to_visual(0)
-            local zero_y = (self.height - 2) - (zero_visual * (self.height - 4))
+            local zero_y = self.height - (zero_visual * self.height)
             g:set_color(200, 200, 200)
             g:fill_rect(0, zero_y, self.width, 1)
         end
@@ -667,14 +732,14 @@ function lnavu:paint_continuous_mode(g, visual_position)
             for db = self.db_min, self.db_max, self.grid_step do
                 if db ~= self.db_min and db ~= self.db_max and db ~= 0 then
                     local mark_visual = self:db_to_visual(db)
-                    local mark_y = (self.height - 2) - (mark_visual * (self.height - 4))
+                    local mark_y = self.height - (mark_visual * self.height)
                     g:fill_rect(0, mark_y, self.width, 1)
                 end
             end
         end
     else
         -- VU Horizontal (original)
-        local bar_width = visual_position * (self.width - 4)
+        local bar_width = visual_position * self.width
         
         -- Desenha gradiente de cores
         if bar_width > 0 then
@@ -682,7 +747,7 @@ function lnavu:paint_continuous_mode(g, visual_position)
             local segment_width = bar_width / segments
             
             for i = 0, segments - 1 do
-                local x = 2 + (i * segment_width)
+                local x = (i * segment_width)
                 local w = segment_width
                 
                 -- Calcula a posição normalizada deste segmento (0 a visual_position)
@@ -694,24 +759,24 @@ function lnavu:paint_continuous_mode(g, visual_position)
                 -- Obtém cor para este dB
                 local cr, cg, cb = self:get_color_for_db(seg_db)
                 g:set_color(cr, cg, cb)
-                g:fill_rect(x, 2, w, self.height - 4)
+                g:fill_rect(x, 0, w, self.height)
             end
         end
         
         -- Desenha linha de pico
         if self.peak_db > self.db_min then
             local peak_visual = self:db_to_visual(self.peak_db)
-            local peak_x = 2 + (peak_visual * (self.width - 4))
+            local peak_x = (peak_visual * self.width)
             
             local pr, pg, pb = self:get_color_for_db(self.peak_db)
             g:set_color(pr, pg, pb)
-            g:fill_rect(peak_x - 1, 2, 2, self.height - 4)
+            g:fill_rect(peak_x - 1, 0, 2, self.height)
         end
         
         -- Desenha linha de referência em 0dB (sempre visível)
         if 0 >= self.db_min and 0 <= self.db_max then
             local zero_visual = self:db_to_visual(0)
-            local zero_x = 2 + (zero_visual * (self.width - 4))
+            local zero_x = (zero_visual * self.width)
             g:set_color(200, 200, 200)
             g:fill_rect(zero_x, 0, 1, self.height)
         end
@@ -722,7 +787,7 @@ function lnavu:paint_continuous_mode(g, visual_position)
             for db = self.db_min, self.db_max, self.grid_step do
                 if db ~= self.db_min and db ~= self.db_max and db ~= 0 then
                     local mark_visual = self:db_to_visual(db)
-                    local mark_x = 2 + (mark_visual * (self.width - 4))
+                    local mark_x = (mark_visual * self.width)
                     g:fill_rect(mark_x, 0, 1, self.height)
                 end
             end
@@ -743,12 +808,12 @@ function lnavu:paint_continuous_mode_multichannel(g)
         -- Vertical: canais lado a lado
         local channel_gap = (self.num_channels > 1) and 1 or 0  -- 1px de gap entre canais
         local total_gap = channel_gap * (self.num_channels - 1)
-        local channel_width = (self.width - 4 - total_gap) / self.num_channels
+        local channel_width = (self.width - total_gap) / self.num_channels
         
         for ch = 1, self.num_channels do
             local visual_position = self:db_to_visual(self.channel_db[ch])
-            local x_offset = 2 + ((ch - 1) * (channel_width + channel_gap))
-            local bar_height = visual_position * (self.height - 4 - tag_space)
+            local x_offset = ((ch - 1) * (channel_width + channel_gap))
+            local bar_height = visual_position * (self.height - tag_space)
             
             -- Desenha gradiente
             if bar_height > 0 then
@@ -756,7 +821,7 @@ function lnavu:paint_continuous_mode_multichannel(g)
                 local segment_height = bar_height / segments
                 
                 for i = 0, segments - 1 do
-                    local y = (self.height - 2 - tag_space) - ((i + 1) * segment_height)
+                    local y = (self.height - tag_space) - ((i + 1) * segment_height)
                     local h = segment_height
                     local seg_visual_position = (i / segments) * visual_position
                     local seg_db = self:visual_to_db(seg_visual_position)
@@ -770,7 +835,7 @@ function lnavu:paint_continuous_mode_multichannel(g)
             -- Linha de pico
             if self.channel_peak_db[ch] > self.db_min then
                 local peak_visual = self:db_to_visual(self.channel_peak_db[ch])
-                local peak_y = (self.height - 2 - tag_space) - (peak_visual * (self.height - 4 - tag_space))
+                local peak_y = (self.height - tag_space) - (peak_visual * (self.height - tag_space))
                 local pr, pg, pb = self:get_color_for_db(self.channel_peak_db[ch])
                 g:set_color(pr, pg, pb)
                 g:fill_rect(x_offset, peak_y - 1, channel_width, 2)
@@ -786,9 +851,10 @@ function lnavu:paint_continuous_mode_multichannel(g)
         
         -- Desenha linhas separadoras entre canais
         if self.num_channels > 1 then
-            g:set_color(40, 40, 40)
+            local sr, sg, sb = Colors.hsb(C_BG_DARK[1], C_BG_DARK[2], C_BG_DARK[3])
+            g:set_color(sr, sg, sb)
             for ch = 1, self.num_channels - 1 do
-                local line_x = 2 + (ch * (channel_width + channel_gap)) - channel_gap
+                local line_x = (ch * (channel_width + channel_gap)) - channel_gap
                 g:fill_rect(line_x, 0, channel_gap, self.height)
             end
         end
@@ -796,12 +862,12 @@ function lnavu:paint_continuous_mode_multichannel(g)
         -- Horizontal: canais um acima do outro
         local channel_gap = (self.num_channels > 1) and 1 or 0
         local total_gap = channel_gap * (self.num_channels - 1)
-        local channel_height = (self.height - 4 - total_gap) / self.num_channels
+        local channel_height = (self.height - total_gap) / self.num_channels
         
         for ch = 1, self.num_channels do
             local visual_position = self:db_to_visual(self.channel_db[ch])
-            local y_offset = 2 + ((ch - 1) * (channel_height + channel_gap))
-            local bar_width = visual_position * (self.width - 4 - tag_space)
+            local y_offset = ((ch - 1) * (channel_height + channel_gap))
+            local bar_width = visual_position * (self.width - tag_space)
             
             -- Desenha gradiente
             if bar_width > 0 then
@@ -809,7 +875,7 @@ function lnavu:paint_continuous_mode_multichannel(g)
                 local segment_width = bar_width / segments
                 
                 for i = 0, segments - 1 do
-                    local x = 2 + tag_space + (i * segment_width)
+                    local x = tag_space + (i * segment_width)
                     local w = segment_width
                     local seg_position = (i / segments) * visual_position
                     local seg_db = self:visual_to_db(seg_position)
@@ -823,7 +889,7 @@ function lnavu:paint_continuous_mode_multichannel(g)
             -- Linha de pico
             if self.channel_peak_db[ch] > self.db_min then
                 local peak_visual = self:db_to_visual(self.channel_peak_db[ch])
-                local peak_x = 2 + tag_space + (peak_visual * (self.width - 4 - tag_space))
+                local peak_x = tag_space + (peak_visual * (self.width - tag_space))
                 local pr, pg, pb = self:get_color_for_db(self.channel_peak_db[ch])
                 g:set_color(pr, pg, pb)
                 g:fill_rect(peak_x - 1, y_offset, 2, channel_height)
@@ -833,15 +899,16 @@ function lnavu:paint_continuous_mode_multichannel(g)
             if self.num_channels > 1 and self.show_channel_labels then
                 local tag = self.channel_tags[ch] or tostring(ch)
                 g:set_color(180, 180, 180)
-                g:draw_text(tag, 2, y_offset, tag_space - 2, channel_height, 1)
+                g:draw_text(tag, 0, y_offset, tag_space - 2, channel_height, 1)
             end
         end
         
         -- Desenha linhas separadoras entre canais
         if self.num_channels > 1 then
-            g:set_color(40, 40, 40)
+            local sr, sg, sb = Colors.hsb(C_BG_DARK[1], C_BG_DARK[2], C_BG_DARK[3])
+            g:set_color(sr, sg, sb)
             for ch = 1, self.num_channels - 1 do
-                local line_y = 2 + (ch * (channel_height + channel_gap)) - channel_gap
+                local line_y = (ch * (channel_height + channel_gap)) - channel_gap
                 g:fill_rect(0, line_y, self.width, channel_gap)
             end
         end
@@ -852,13 +919,13 @@ function lnavu:paint_continuous_mode_multichannel(g)
     if self.orientation == "vertical" then
         if 0 >= self.db_min and 0 <= self.db_max then
             local zero_visual = self:db_to_visual(0)
-            local zero_y = (self.height - 2 - tag_space) - (zero_visual * (self.height - 4 - tag_space))
+            local zero_y = (self.height - tag_space) - (zero_visual * (self.height - tag_space))
             g:fill_rect(0, zero_y, self.width, 1)
         end
     else
         if 0 >= self.db_min and 0 <= self.db_max then
             local zero_visual = self:db_to_visual(0)
-            local zero_x = 2 + tag_space + (zero_visual * (self.width - 4 - tag_space))
+            local zero_x = tag_space + (zero_visual * (self.width - tag_space))
             g:fill_rect(zero_x, 0, 1, self.height)
         end
     end
@@ -876,13 +943,13 @@ function lnavu:paint_led_mode(g, visual_position)
     
     if self.orientation == "vertical" then
         -- Verifica se os LEDs ficariam muito pequenos
-        local led_pixel_height = (self.height - 4) / self.num_leds - gap
+        local led_pixel_height = self.height / self.num_leds - gap
         if led_pixel_height < 1 then
             gap = 0
             use_rounded = false
         end
     else
-        local led_pixel_width = (self.width - 4) / self.num_leds - gap
+        local led_pixel_width = self.width / self.num_leds - gap
         if led_pixel_width < 1 then
             gap = 0
             use_rounded = false
@@ -897,8 +964,8 @@ function lnavu:paint_led_mode(g, visual_position)
             
             -- Verifica se este LED deve estar aceso
             if visual_position >= led_visual_min then
-                local y = (self.height - 2) - (led_visual_max * (self.height - 4))
-                local led_pixel_height = led_visual_size * (self.height - 4)
+                local y = self.height - (led_visual_max * self.height)
+                local led_pixel_height = led_visual_size * self.height
                 
                 -- Aplica gap
                 if gap > 0 and led_pixel_height > gap then
@@ -915,9 +982,9 @@ function lnavu:paint_led_mode(g, visual_position)
                 local cr, cg, cb = self:get_color_for_db(led_db)
                 g:set_color(cr, cg, cb)
                 if use_rounded and led_pixel_height > corner_radius * 2 then
-                    g:fill_rounded_rect(2, y, self.width - 4, led_pixel_height, corner_radius)
+                    g:fill_rounded_rect(0, y, self.width, led_pixel_height, corner_radius)
                 else
-                    g:fill_rect(2, y, self.width - 4, led_pixel_height)
+                    g:fill_rect(0, y, self.width, led_pixel_height)
                 end
             end
         end
@@ -930,8 +997,8 @@ function lnavu:paint_led_mode(g, visual_position)
             local led_visual_min = peak_led_index * led_visual_size
             local led_visual_max = (peak_led_index + 1) * led_visual_size
             
-            local peak_y = (self.height - 2) - (led_visual_max * (self.height - 4))
-            local led_pixel_height = led_visual_size * (self.height - 4)
+            local peak_y = self.height - (led_visual_max * self.height)
+            local led_pixel_height = led_visual_size * self.height
             
             -- Aplica gap
             if gap > 0 and led_pixel_height > gap then
@@ -942,16 +1009,16 @@ function lnavu:paint_led_mode(g, visual_position)
             local pr, pg, pb = self:get_color_for_db(self.peak_db)
             g:set_color(pr, pg, pb)
             if use_rounded and led_pixel_height > corner_radius * 2 then
-                g:fill_rounded_rect(2, peak_y, self.width - 4, led_pixel_height, corner_radius)
+                g:fill_rounded_rect(0, peak_y, self.width, led_pixel_height, corner_radius)
             else
-                g:fill_rect(2, peak_y, self.width - 4, led_pixel_height)
+                g:fill_rect(0, peak_y, self.width, led_pixel_height)
             end
         end
         
         -- Desenha linha de referência em 0dB (sempre visível)
         if 0 >= self.db_min and 0 <= self.db_max then
             local zero_visual = self:db_to_visual(0)
-            local zero_y = (self.height - 2) - (zero_visual * (self.height - 4))
+            local zero_y = self.height - (zero_visual * self.height)
             g:set_color(200, 200, 200)
             g:fill_rect(0, zero_y, self.width, 1)
         end
@@ -963,8 +1030,8 @@ function lnavu:paint_led_mode(g, visual_position)
             
             -- Verifica se este LED deve estar aceso
             if visual_position >= led_visual_min then
-                local x = 2 + (led_visual_min * (self.width - 4))
-                local led_pixel_width = led_visual_size * (self.width - 4)
+                local x = (led_visual_min * self.width)
+                local led_pixel_width = led_visual_size * self.width
                 
                 -- Aplica gap
                 if gap > 0 and led_pixel_width > gap then
@@ -981,9 +1048,9 @@ function lnavu:paint_led_mode(g, visual_position)
                 local cr, cg, cb = self:get_color_for_db(led_db)
                 g:set_color(cr, cg, cb)
                 if use_rounded and led_pixel_width > corner_radius * 2 then
-                    g:fill_rounded_rect(x, 2, led_pixel_width, self.height - 4, corner_radius)
+                    g:fill_rounded_rect(x, 0, led_pixel_width, self.height, corner_radius)
                 else
-                    g:fill_rect(x, 2, led_pixel_width, self.height - 4)
+                    g:fill_rect(x, 0, led_pixel_width, self.height)
                 end
             end
         end
@@ -996,8 +1063,8 @@ function lnavu:paint_led_mode(g, visual_position)
             local led_visual_min = peak_led_index * led_visual_size
             local led_visual_max = (peak_led_index + 1) * led_visual_size
             
-            local peak_x = 2 + (led_visual_min * (self.width - 4))
-            local led_pixel_width = led_visual_size * (self.width - 4)
+            local peak_x = (led_visual_min * self.width)
+            local led_pixel_width = led_visual_size * self.width
             
             -- Aplica gap
             if gap > 0 and led_pixel_width > gap then
@@ -1008,16 +1075,16 @@ function lnavu:paint_led_mode(g, visual_position)
             local pr, pg, pb = self:get_color_for_db(self.peak_db)
             g:set_color(pr, pg, pb)
             if use_rounded and led_pixel_width > corner_radius * 2 then
-                g:fill_rounded_rect(peak_x, 2, led_pixel_width, self.height - 4, corner_radius)
+                g:fill_rounded_rect(peak_x, 0, led_pixel_width, self.height, corner_radius)
             else
-                g:fill_rect(peak_x, 2, led_pixel_width, self.height - 4)
+                g:fill_rect(peak_x, 0, led_pixel_width, self.height)
             end
         end
         
         -- Desenha linha de referência em 0dB (sempre visível)
         if 0 >= self.db_min and 0 <= self.db_max then
             local zero_visual = self:db_to_visual(0)
-            local zero_x = 2 + (zero_visual * (self.width - 4))
+            local zero_x = (zero_visual * self.width)
             g:set_color(200, 200, 200)
             g:fill_rect(zero_x, 0, 1, self.height)
         end
@@ -1029,10 +1096,7 @@ function lnavu:paint_labels(g)
     local marks = self:get_label_marks()
     
     -- Usa cores da escala ou padrão se não inicializado
-    local scale_r = self.scale_r or 200
-    local scale_g = self.scale_g or 200
-    local scale_b = self.scale_b or 200
-    g:set_color(scale_r, scale_g, scale_b)  -- Cor do texto e marcadores
+    g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])  -- Cor do texto e marcadores
     
     -- Calcula tamanho de fonte baseado na largura (para horizontal) ou altura (para vertical)
     local font_size = 10  -- padrão
@@ -1053,7 +1117,7 @@ function lnavu:paint_labels(g)
         
         for _, db in ipairs(marks) do
             local visual_pos = self:db_to_visual(db)
-            local y = (self.height - 2) - (visual_pos * (self.height - 4))
+            local y = self.height - (visual_pos * self.height)
             
             -- Linha horizontal pequena (marcador)
             g:fill_rect(self.width, y, 3, 1)
@@ -1080,7 +1144,7 @@ function lnavu:paint_labels(g)
         
         for _, db in ipairs(marks) do
             local visual_pos = self:db_to_visual(db)
-            local x = 2 + (visual_pos * (self.width - 4))
+            local x = (visual_pos * self.width)
             
             -- Linha vertical pequena (marcador)
             g:fill_rect(x, self.height, 1, 3)
@@ -1116,15 +1180,15 @@ function lnavu:paint_led_mode_multichannel(g)
     
     -- Calcula gap
     local gap = 2
-    local corner_radius = 3
+    local corner_radius = 1
     local use_rounded = true
     
     if self.orientation == "vertical" then
         -- Vertical: canais lado a lado
         local channel_gap = (self.num_channels > 1) and 1 or 0  -- 1px de gap entre canais
         local total_gap = channel_gap * (self.num_channels - 1)
-        local channel_width = (self.width - 4 - total_gap) / self.num_channels
-        local led_pixel_height = (self.height - 4 - tag_space) / self.num_leds - gap
+        local channel_width = (self.width - total_gap) / self.num_channels
+        local led_pixel_height = (self.height - tag_space) / self.num_leds - gap
         
         if led_pixel_height < 1 then
             gap = 0
@@ -1133,7 +1197,7 @@ function lnavu:paint_led_mode_multichannel(g)
         
         for ch = 1, self.num_channels do
             local visual_position = self:db_to_visual(self.channel_db[ch])
-            local x_offset = 2 + ((ch - 1) * (channel_width + channel_gap))
+            local x_offset = ((ch - 1) * (channel_width + channel_gap))
             local led_padding = (self.num_channels > 1) and 1 or 0  -- padding lateral nos LEDs
             
             for i = 0, self.num_leds - 1 do
@@ -1141,8 +1205,8 @@ function lnavu:paint_led_mode_multichannel(g)
                 local led_visual_max = (i + 1) * led_visual_size
                 
                 if visual_position >= led_visual_min then
-                    local y = (self.height - 2 - tag_space) - (led_visual_max * (self.height - 4 - tag_space))
-                    local led_pixel_height = led_visual_size * (self.height - 4 - tag_space)
+                    local y = (self.height - tag_space) - (led_visual_max * (self.height - tag_space))
+                    local led_pixel_height = led_visual_size * (self.height - tag_space)
                     
                     if gap > 0 and led_pixel_height > gap then
                         y = y + gap / 2
@@ -1172,9 +1236,10 @@ function lnavu:paint_led_mode_multichannel(g)
         
         -- Desenha linhas separadoras entre canais
         if self.num_channels > 1 then
-            g:set_color(40, 40, 40)  -- linha escura
+            local sr, sg, sb = Colors.hsb(C_BG_DARK[1], C_BG_DARK[2], C_BG_DARK[3])
+            g:set_color(sr, sg, sb)
             for ch = 1, self.num_channels - 1 do
-                local line_x = 2 + (ch * (channel_width + channel_gap)) - channel_gap
+                local line_x = (ch * (channel_width + channel_gap)) - channel_gap
                 g:fill_rect(line_x, 0, channel_gap, self.height)
             end
         end
@@ -1182,8 +1247,8 @@ function lnavu:paint_led_mode_multichannel(g)
         -- Horizontal: canais um acima do outro
         local channel_gap = (self.num_channels > 1) and 1 or 0  -- 1px de gap entre canais
         local total_gap = channel_gap * (self.num_channels - 1)
-        local channel_height = (self.height - 4 - total_gap) / self.num_channels
-        local led_pixel_width = (self.width - 4 - tag_space) / self.num_leds - gap
+        local channel_height = (self.height - total_gap) / self.num_channels
+        local led_pixel_width = (self.width - tag_space) / self.num_leds - gap
         
         if led_pixel_width < 3 then
             gap = 0
@@ -1192,7 +1257,7 @@ function lnavu:paint_led_mode_multichannel(g)
         
         for ch = 1, self.num_channels do
             local visual_position = self:db_to_visual(self.channel_db[ch])
-            local y_offset = 2 + ((ch - 1) * (channel_height + channel_gap))
+            local y_offset = ((ch - 1) * (channel_height + channel_gap))
             local led_padding = (self.num_channels > 1) and 1 or 0  -- padding vertical nos LEDs
             
             for i = 0, self.num_leds - 1 do
@@ -1200,8 +1265,8 @@ function lnavu:paint_led_mode_multichannel(g)
                 local led_visual_max = (i + 1) * led_visual_size
                 
                 if visual_position >= led_visual_min then
-                    local x = 2 + tag_space + (led_visual_min * (self.width - 4 - tag_space))
-                    local led_pixel_width = led_visual_size * (self.width - 4 - tag_space)
+                    local x = tag_space + (led_visual_min * (self.width - tag_space))
+                    local led_pixel_width = led_visual_size * (self.width - tag_space)
                     
                     if gap > 0 and led_pixel_width > gap then
                         x = x + gap / 2
@@ -1231,9 +1296,10 @@ function lnavu:paint_led_mode_multichannel(g)
         
         -- Desenha linhas separadoras entre canais
         if self.num_channels > 1 then
-            g:set_color(40, 40, 40)
+            local sr, sg, sb = Colors.hsb(C_BG_DARK[1], C_BG_DARK[2], C_BG_DARK[3])
+            g:set_color(sr, sg, sb)
             for ch = 1, self.num_channels - 1 do
-                local line_y = 2 + (ch * (channel_height + channel_gap)) - channel_gap
+                local line_y = (ch * (channel_height + channel_gap)) - channel_gap
                 g:fill_rect(0, line_y, self.width, channel_gap)
             end
         end
@@ -1244,13 +1310,13 @@ function lnavu:paint_led_mode_multichannel(g)
     if self.orientation == "vertical" then
         if 0 >= self.db_min and 0 <= self.db_max then
             local zero_visual = self:db_to_visual(0)
-            local zero_y = (self.height - 2 - tag_space) - (zero_visual * (self.height - 4 - tag_space))
+            local zero_y = (self.height - tag_space) - (zero_visual * (self.height - tag_space))
             g:fill_rect(0, zero_y, self.width, 1)
         end
     else
         if 0 >= self.db_min and 0 <= self.db_max then
             local zero_visual = self:db_to_visual(0)
-            local zero_x = 2 + tag_space + (zero_visual * (self.width - 4 - tag_space))
+            local zero_x = tag_space + (zero_visual * (self.width - tag_space))
             g:fill_rect(zero_x, 0, 1, self.height)
         end
     end
@@ -1368,8 +1434,19 @@ function lnavu:get_flags_command()
     elseif self.num_leds ~= 14 then
         cmd = cmd .. string.format(" @led %g", self.num_leds)
     end
-    if self.back_r ~= 50 or self.back_g ~= 50 or self.back_b ~= 50 then
-        cmd = cmd .. string.format(" @backrgb %g %g %g", self.back_r, self.back_g, self.back_b)
+    if self.c_background.source ~= "default" then
+        if self.c_background.source == "hsb" then
+            cmd = cmd .. string.format(" @bgcolor hsb %g %g %g", self.c_background.h, self.c_background.s, self.c_background.b)
+        else
+            cmd = cmd .. string.format(" @bgcolor %d %d %d", self.c_background[1], self.c_background[2], self.c_background[3])
+        end
+    end
+    if self.c_text.source ~= "default" then
+        if self.c_text.source == "hsb" then
+            cmd = cmd .. string.format(" @textcolor hsb %g %g %g", self.c_text.h, self.c_text.s, self.c_text.b)
+        else
+            cmd = cmd .. string.format(" @textcolor %d %d %d", self.c_text[1], self.c_text[2], self.c_text[3])
+        end
     end
     return cmd
 end
@@ -1404,7 +1481,8 @@ function lnavu:in_1_getinfo(atoms)
     pd.post(string.format("label: %s", self.show_label and "yes" or "no"))
     pd.post(string.format("channels: %g", self.num_channels))
     pd.post(string.format("mode: %s%s", self.led_mode and "LED" or "continuous", self.led_mode and string.format(" (num_leds: %g)", self.num_leds) or ""))
-    pd.post(string.format("background: RGB(%g, %g, %g)", self.back_r, self.back_g, self.back_b))
+    pd.post(string.format("background: RGB(%d, %d, %d)", self.c_background[1], self.c_background[2], self.c_background[3]))
+    pd.post(string.format("text: RGB(%d, %d, %d)", self.c_text[1], self.c_text[2], self.c_text[3]))
     pd.post(string.format("current_db: %g dB", self.current_db))
     pd.post(string.format("peak_db: %g dB", self.peak_db))
     pd.post("Creation command: " .. self:get_creation_command())
