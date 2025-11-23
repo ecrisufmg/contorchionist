@@ -22,15 +22,16 @@ local Colors = require("colors")
 
 local ctgui_slider = pd.Class:new():register("ctgui.slider")
 
--- Default Colors
-local C_BG_LIGHT = {0.93, 0.93, 0.93}
-local C_BG_DARK = {0.2, 0.2, 0.2}
-local C_SLOT_LIGHT = {0.8, 0.8, 0.8}
-local C_SLOT_DARK = {0.1, 0.1, 0.1}
-local C_HANDLE_LIGHT = {0.6, 0.6, 0.6}
-local C_HANDLE_DARK = {0.5, 0.5, 0.5}
+-- Default Colors (HSB)
+local C_BG_LIGHT = {0, 0, 0.9}
+local C_BG_DARK = {0, 0, 0.3}
+local C_SLOT_LIGHT = {0, 0, 0.7}
+local C_SLOT_DARK = {0, 0, 0.2}
+local C_HANDLE_LIGHT = {0, 0, 0.45}
+local C_HANDLE_DARK = {0, 0, 0.55}
 
 function ctgui_slider:initialize(sel, atoms)
+    self.creation_args = atoms
     local parser = ArgParser:new(atoms)
 
     -- Dimensions
@@ -57,50 +58,113 @@ function ctgui_slider:initialize(sel, atoms)
     self.max_val = parser:get_float("max maximum", default_max)
 
     -- Colors
-    local function get_color(name, default_rgb)
-        local val = parser:get_float_list(name .. "color")
-        if #val >= 3 then
-            return {val[1]/255, val[2]/255, val[3]/255} -- Normalize if 0-255 passed? No, usually 0-1 in pd-lua context or 0-255? 
-            -- Wait, ctgui.vu uses Colors.hsb which returns 0-255. 
-            -- Let's stick to 0-255 for internal storage if that's what paint uses.
-            -- Actually, pd.Class:paint uses 0-255 for set_color? No, usually standard is whatever the lib uses.
-            -- In ctgui.vu, Colors.hsb returns 0-255. g:set_color takes 0-255?
-            -- Let's check ctgui.vu again. It uses g:set_color(r,g,b).
+    
+    -- Helper: RGB to HSB (0-1)
+    local function rgb_to_hsb(r, g, b)
+        local max = math.max(r, g, b)
+        local min = math.min(r, g, b)
+        local delta = max - min
+        local h, s, v = 0, 0, max
+
+        if max > 0 then s = delta / max else s = 0 end
+        
+        if delta > 0 then
+            if r == max then h = (g - b) / delta
+            elseif g == max then h = 2 + (b - r) / delta
+            else h = 4 + (r - g) / delta end
+            h = h * 60
+            if h < 0 then h = h + 360 end
+            h = h / 360
         end
-        -- Check for hex or other formats? For now simple list.
-        -- Let's use the helper from ctgui.vu if possible, but I'll simplify.
-        -- ArgParser returns what is passed.
-        -- If user passes @color 255 0 0, it's 255.
-        return nil
+        return h, s, v
+    end
+
+    -- Helper to get color from flags (RGB or HSB) or default
+    local function get_color(name, default_hsb)
+        -- Check for @namecolor (e.g. @playcolor)
+        local val = parser:get_value(name .. "color")
+        
+        local h, s, b = default_hsb[1], default_hsb[2], default_hsb[3]
+        local source = "default"
+
+        if type(val) == "table" then
+            -- Check for format: {"rgb", r, g, b} or {"hsb", h, s, b}
+            if type(val[1]) == "string" then
+                local mode = val[1]
+                if (mode == "rgb" or mode == "RGB") and #val >= 4 then
+                    h, s, b = rgb_to_hsb(val[2], val[3], val[4])
+                    source = "rgb"
+                elseif (mode == "hsb" or mode == "HSB" or mode == "hsl" or mode == "HSL") and #val >= 4 then
+                    h, s, b = val[2], val[3], val[4]
+                    source = "hsb"
+                end
+            -- Check for format: {h, s, b} (implicit HSB)
+            elseif type(val[1]) == "number" and #val >= 3 then
+                h, s, b = val[1], val[2], val[3]
+                source = "hsb"
+            end
+        end
+
+        -- Convert to RGB (0-255) for drawing
+        local r, g, b_val = Colors.hsb(h, s, b)
+        return {r, g, b_val, source=source, h=h, s=s, b=b}
     end
 
     -- Dark mode
     local is_dark = parser:get_bool("dark")
     
-    -- Helper to parse color with defaults
-    local function parse_color(flag_names, default_rgb_01) 
-        local r, g, b = default_rgb_01[1], default_rgb_01[2], default_rgb_01[3]
-        
-        -- Check flags
-        local val = parser:get_float_list(flag_names)
-        if val and #val >= 3 then
-            r, g, b = val[1], val[2], val[3]
+    self.c_bg = get_color("bg", is_dark and C_BG_DARK or C_BG_LIGHT)
+    -- Also check "bgcolor" for backward compatibility if needed, but get_color checks "name" .. "color"
+    -- So "bg" -> "bgcolor". 
+    -- But wait, previous code checked "bgcolor" AND "bg".
+    -- parser:get_value("bgcolor") might be needed if user uses @bgcolor.
+    -- My get_color does `name .. "color"`. So `get_color("bg")` checks `@bgcolor`.
+    -- If user uses `@bg`, it won't be found by `get_color("bg")` which looks for `@bgcolor`.
+    -- Let's adjust get_color to check both if needed, or just pass "bg" and rely on "bgcolor".
+    -- The previous code used `parse_color("bgcolor bg", ...)` which checked both.
+    
+    -- Let's refine get_color to take a list of keys or handle the suffix better.
+    -- Or just manually check.
+    
+    -- Actually, let's stick to the pattern:
+    -- get_color("bg") -> checks @bgcolor.
+    -- If I want to check @bg, I need to pass it.
+    
+    -- Let's redefine get_color to be more flexible.
+    
+    local function get_color_flexible(keys, default_hsb)
+        local val = nil
+        for _, key in ipairs(keys) do
+            val = parser:get_value(key)
+            if val then break end
         end
         
-        -- Normalize to 0-255 if all values are <= 1.0
-        -- This allows users to pass "1 0 0" for red (0-1) or "255 0 0" (0-255)
-        if r <= 1.0 and g <= 1.0 and b <= 1.0 then
-            r, g, b = r*255, g*255, b*255
+        local h, s, b = default_hsb[1], default_hsb[2], default_hsb[3]
+        local source = "default"
+
+        if type(val) == "table" then
+             if type(val[1]) == "string" then
+                local mode = val[1]
+                if (mode == "rgb" or mode == "RGB") and #val >= 4 then
+                    h, s, b = rgb_to_hsb(val[2], val[3], val[4])
+                    source = "rgb"
+                elseif (mode == "hsb" or mode == "HSB" or mode == "hsl" or mode == "HSL") and #val >= 4 then
+                    h, s, b = val[2], val[3], val[4]
+                    source = "hsb"
+                end
+            elseif type(val[1]) == "number" and #val >= 3 then
+                h, s, b = val[1], val[2], val[3]
+                source = "hsb"
+            end
         end
         
-        return {math.max(0, math.min(255, math.floor(r))), 
-                math.max(0, math.min(255, math.floor(g))), 
-                math.max(0, math.min(255, math.floor(b)))}
+        local r, g, b_val = Colors.hsb(h, s, b)
+        return {r, g, b_val, source=source, h=h, s=s, b=b}
     end
 
-    self.c_bg = parse_color("bgcolor bg", is_dark and C_BG_DARK or C_BG_LIGHT)
-    self.c_slot = parse_color("slotcolor trackcolor", is_dark and C_SLOT_DARK or C_SLOT_LIGHT)
-    self.c_handle = parse_color("color handlecolor", is_dark and C_HANDLE_DARK or C_HANDLE_LIGHT)
+    self.c_bg = get_color_flexible({"bgcolor", "bg"}, is_dark and C_BG_DARK or C_BG_LIGHT)
+    self.c_slot = get_color_flexible({"slotcolor", "trackcolor"}, is_dark and C_SLOT_DARK or C_SLOT_LIGHT)
+    self.c_handle = get_color_flexible({"color", "handlecolor"}, is_dark and C_HANDLE_DARK or C_HANDLE_LIGHT)
 
     -- FPS
     local gui_fps = parser:get_float("guifps guishutter fps shutter", 20)
@@ -137,6 +201,20 @@ function ctgui_slider:initialize(sel, atoms)
     self.repaint = self.throttled_repaint
 
     return true
+end
+
+function ctgui_slider:in_1_getcode()
+    local str = "ctgui.slider"
+    for i, v in ipairs(self.creation_args) do
+        if type(v) == "number" then
+            local s = string.format("%.2f", v)
+            s = s:gsub("0+$", ""):gsub("%.$", "")
+            str = str .. " " .. s
+        else
+            str = str .. " " .. tostring(v)
+        end
+    end
+    pd.post(str)
 end
 
 function ctgui_slider:postinitialize()
