@@ -206,6 +206,16 @@ function ctgui_slider:initialize(sel, atoms)
     self.line_running = false
     self.line_grain = parser:get_float("linegrain", 20)
     self.default_line_ms = parser:get_float("linems", 0)
+    
+    -- Easing
+    local curve = parser:get_value("curve easing")
+    if type(curve) == "number" then
+        self.default_easing = curve
+    elseif type(curve) == "string" then
+        self.default_easing = curve
+    else
+        self.default_easing = "line"
+    end
 
     -- Controller Input/Output
     -- Default to normalized 0-1
@@ -438,7 +448,7 @@ function ctgui_slider:stop_line()
     end
 end
 
-function ctgui_slider:start_line(target, time_ms)
+function ctgui_slider:start_line(target, time_ms, easing)
     self:stop_line()
     
     target = math.max(self.min_val, math.min(self.max_val, target))
@@ -452,8 +462,10 @@ function ctgui_slider:start_line(target, time_ms)
     if ticks < 1 then ticks = 1 end
     
     self.line_target = target
-    self.line_ticks = ticks
-    self.line_inc = (target - self.current_value) / ticks
+    self.line_start_val = self.current_value
+    self.line_total_ticks = ticks
+    self.line_current_tick = 0
+    self.line_easing = easing or self.default_easing
     
     self.line_running = true
     self.line_clock:delay(self.line_grain)
@@ -462,12 +474,33 @@ end
 function ctgui_slider:line_tick()
     if not self.line_running then return end
     
-    self.current_value = self.current_value + self.line_inc
-    self.line_ticks = self.line_ticks - 1
+    self.line_current_tick = self.line_current_tick + 1
+    local t = self.line_current_tick / self.line_total_ticks
+    if t > 1 then t = 1 end
+    
+    -- Easing
+    local eased_t = t
+    local mode = self.line_easing
+    local mode_num = tonumber(mode)
+    
+    if mode == "hann" then
+        eased_t = 0.5 * (1 - math.cos(math.pi * t))
+    elseif mode_num and mode_num ~= 0 then
+        if mode_num > 0 then
+            -- Ease In
+            eased_t = t ^ mode_num
+        else
+            -- Ease Out
+            eased_t = 1 - ((1 - t) ^ math.abs(mode_num))
+        end
+    end
+    -- "line" or 0 or unknown -> linear (t)
+    
+    self.current_value = self.line_start_val + (self.line_target - self.line_start_val) * eased_t
     
     -- Check bounds/completion
     local finished = false
-    if self.line_ticks <= 0 then
+    if self.line_current_tick >= self.line_total_ticks then
         self.current_value = self.line_target
         finished = true
     end
@@ -490,7 +523,9 @@ end
 function ctgui_slider:in_1_list(atoms)
     if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
         if #atoms >= 2 and type(atoms[2]) == "number" and atoms[2] > 0 then
-            self:start_line(atoms[1], atoms[2])
+            local easing = nil
+            if #atoms >= 3 then easing = atoms[3] end
+            self:start_line(atoms[1], atoms[2], easing)
         else
             if self.default_line_ms > 0 then
                 self:start_line(atoms[1], self.default_line_ms)
@@ -534,7 +569,9 @@ function ctgui_slider:in_2_list(atoms)
             local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
             norm = math.max(0, math.min(1, norm))
             local target = self:visual_to_value(norm)
-            self:start_line(target, atoms[2])
+            local easing = nil
+            if #atoms >= 3 then easing = atoms[3] end
+            self:start_line(target, atoms[2], easing)
         else
             self:in_2_float(atoms[1])
         end
@@ -647,6 +684,17 @@ function ctgui_slider:in_1_linegrain(atoms)
     if type(f) == "number" then
         self.line_grain = math.max(1, f)
     end
+end
+
+function ctgui_slider:in_1_curve(atoms)
+    local v = type(atoms) == "table" and atoms[1] or atoms
+    if type(v) == "number" or type(v) == "string" then
+        self.default_easing = v
+    end
+end
+
+function ctgui_slider:in_1_easing(atoms)
+    self:in_1_curve(atoms)
 end
 
 function ctgui_slider:data_tick()
