@@ -418,6 +418,13 @@ end
 
 -- Interaction (Same as before)
 
+function ctgui_numbox:get_char_width(char)
+    if char == "." then
+        return self.fontsize * 0.28 -- Narrower dot
+    end
+    return self.fontsize * 0.6 -- Standard digit width
+end
+
 function ctgui_numbox:get_cursor_info(x)
     local val = self.current_value
     -- Base string for calculation (ensure it has a dot)
@@ -425,24 +432,52 @@ function ctgui_numbox:get_cursor_info(x)
     if not base_s:find("%.") then base_s = base_s .. "." end
     
     local dot_pos = base_s:find("%.")
-    local char_w = self.fontsize * 0.54
     local start_x = 4
     local rel_x = x - start_x
-    local idx = math.floor(rel_x / char_w) + 1
     
-    if idx < 1 then idx = 1 end
+    local current_x = 0
+    local found_idx = nil
+    local rect_x = 0
+    local rect_w = 0
     
-    local power = 0
-    local display_s = base_s
-    
-    -- Calculate power
-    if idx < dot_pos then
-        power = (dot_pos - 1) - idx
-    elseif idx == dot_pos then
-        power = 0 -- Cursor on dot
-    else
-        power = dot_pos - idx
+    -- Check inside base string
+    for i = 1, #base_s do
+        local char = base_s:sub(i, i)
+        local w = self:get_char_width(char)
+        if rel_x < current_x + w then
+            found_idx = i
+            rect_x = start_x + current_x
+            rect_w = w
+            break
+        end
+        current_x = current_x + w
     end
+    
+    -- If not found, it's beyond the string (ghost digits)
+    if not found_idx then
+        local i = #base_s
+        while not found_idx do
+            i = i + 1
+            local char = "0" -- Ghost digits are 0
+            local w = self:get_char_width(char)
+            if rel_x < current_x + w then
+                found_idx = i
+                rect_x = start_x + current_x
+                rect_w = w
+                break
+            end
+            current_x = current_x + w
+            -- Safety break
+            if i > #base_s + 20 then 
+                 found_idx = i
+                 rect_x = start_x + current_x
+                 rect_w = w
+            end
+        end
+    end
+    
+    local idx = found_idx
+    local display_s = base_s
     
     -- Extend string if cursor is past the end
     if idx > #base_s then
@@ -451,10 +486,20 @@ function ctgui_numbox:get_cursor_info(x)
         display_s = string.format("%." .. target_decimals .. "f", val)
     end
     
+    -- Recalculate power
+    local power = 0
+    if idx < dot_pos then
+        power = (dot_pos - 1) - idx
+    elseif idx == dot_pos then
+        power = 0 -- Cursor on dot
+    else
+        power = dot_pos - idx
+    end
+    
     return {
         power = power,
-        rect_x = start_x + (idx - 1) * char_w,
-        rect_w = char_w,
+        rect_x = rect_x,
+        rect_w = rect_w,
         display_s = display_s
     }
 end
@@ -518,6 +563,7 @@ function ctgui_numbox:start_typing()
     pd.send("ctgui_focus", "claim", {self.id})
     self.typing = true
     self.input_buffer = string.format("%g", self.current_value)
+    self.replace_on_type = true -- Enable overwrite
     self:throttled_repaint()
     -- pd.post("ctgui.numbox: Input mode active.")
 end
@@ -569,6 +615,15 @@ function ctgui_numbox:handle_key_name(state, keyname)
     if state == 0 then return end
 
     if not self.typing then return end
+
+    -- Overwrite logic
+    if self.replace_on_type then
+        local is_typing_key = (keyname:match("^%d$") or keyname == "period" or keyname == "." or keyname == "minus" or keyname == "-" or keyname == "e" or keyname == "E" or keyname == "BackSpace")
+        if is_typing_key then
+            self.input_buffer = ""
+            self.replace_on_type = false
+        end
+    end
 
     if keyname == "Return" or keyname == "Enter" then
         self:confirm_typing()
@@ -789,6 +844,8 @@ function ctgui_numbox:paint(g)
 
     -- Use the 5th argument for font size!
     local font_size = self.fontsize
+    local text_x = 4
+    local text_y = (self.height - font_size) / 2
 
     local text_to_draw
     if self.typing then
@@ -799,7 +856,7 @@ function ctgui_numbox:paint(g)
         
         -- Draw highlight box for active digit
         g:set_color(self.c_active[1], self.c_active[2], self.c_active[3]) -- Active color
-        g:fill_rect(info.rect_x, (self.height - font_size)/2, info.rect_w, font_size)
+        g:fill_rect(info.rect_x, text_y, info.rect_w, font_size)
         
         -- Reset text color
         g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])
@@ -815,9 +872,12 @@ function ctgui_numbox:paint(g)
         end
     end
 
-    -- Left aligned, vertically centered
-    local text_x = 4
-    local text_y = (self.height - font_size) / 2
-
-    g:draw_text(text_to_draw, text_x, text_y, self.width - text_x, font_size)
+    -- Draw char by char (Artificial Monospace with variable width dot)
+    local current_x = text_x
+    for i = 1, #text_to_draw do
+        local char = text_to_draw:sub(i, i)
+        local w = self:get_char_width(char)
+        g:draw_text(char, current_x, text_y, 100, font_size) 
+        current_x = current_x + w
+    end
 end
