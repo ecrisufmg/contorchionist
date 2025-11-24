@@ -184,7 +184,38 @@ function ctgui_numbox:initialize(sel, atoms)
     self.focus_receiver = pd.Receive:new():register(self, "ctgui_focus", "receive_focus")
     self.id = tostring(self)
 
+    -- DEBUG: Try to capture internal key events
+    self.debug_receivers = {}
+    local debug_targets = {"#key", "#keyup", "#keyname", "pd"}
+    for _, target in ipairs(debug_targets) do
+        local r = pd.Receive:new():register(self, target, "receive_debug_" .. target:gsub("#", ""):gsub(" ", "_"))
+        if r then
+            table.insert(self.debug_receivers, r)
+            -- pd.post("Registered debug receiver for: " .. target)
+        end
+    end
+
     return true
+end
+
+function ctgui_numbox:receive_debug_key(sel, atoms)
+    pd.post("DEBUG #key: " .. tostring(sel) .. " " .. tostring(atoms[1]))
+end
+
+function ctgui_numbox:receive_debug_keyup(sel, atoms)
+    pd.post("DEBUG #keyup: " .. tostring(sel) .. " " .. tostring(atoms[1]))
+end
+
+function ctgui_numbox:receive_debug_keyname(sel, atoms)
+    pd.post("DEBUG #keyname: " .. tostring(sel) .. " " .. tostring(atoms[1]))
+    -- If this works, we can use it!
+    if sel == "list" and #atoms >= 2 then
+        self:receive_key(sel, atoms)
+    end
+end
+
+function ctgui_numbox:receive_debug_pd(sel, atoms)
+    -- pd.post("DEBUG pd: " .. tostring(sel))
 end
 
 function ctgui_numbox:postinitialize()
@@ -194,6 +225,9 @@ end
 function ctgui_numbox:finalize()
     if self.key_receiver then self.key_receiver:destruct() end
     if self.focus_receiver then self.focus_receiver:destruct() end
+    if self.debug_receivers then
+        for _, r in ipairs(self.debug_receivers) do r:destruct() end
+    end
 end
 
 function ctgui_numbox:get_zero_visual()
