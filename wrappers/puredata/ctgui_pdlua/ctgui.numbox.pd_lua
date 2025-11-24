@@ -22,14 +22,12 @@ local Colors = require("colors")
 local ctgui_numbox = pd.Class:new():register("ctgui.numbox")
 
 -- Default Colors (HSB)
-local C_BG_LIGHT = {0, 0, 0.9}   -- Light Grey
+local C_BG_LIGHT = {0, 0, 0.93}   -- Slightly lighter/different grey
 local C_BG_DARK = {0, 0, 0.35}
-local C_TEXT_LIGHT = {0, 0, 0.2}
+local C_TEXT_LIGHT = {0, 0, 0.15}
 local C_TEXT_DARK = {0, 0, 0.9}
-local C_BORDER_LIGHT = {0, 0, 0.6} -- Darker Grey
+local C_BORDER_LIGHT = {0, 0, 0.5} -- Mid Grey
 local C_BORDER_DARK = {0, 0, 0.6}
-local C_MARKER_LIGHT = {0, 0, 0.4} -- Darker for inlet/outlet markers
-local C_MARKER_DARK = {0, 0, 0.6}
 local C_ACTIVE_BORDER = {0.6, 0.8, 0.9} -- Highlight when active
 
 function ctgui_numbox:initialize(sel, atoms)
@@ -103,8 +101,7 @@ function ctgui_numbox:initialize(sel, atoms)
     self.c_bg = get_color_flexible({"bgcolor", "bg"}, is_dark and C_BG_DARK or C_BG_LIGHT)
     self.c_text = get_color_flexible({"color", "textcolor", "fg"}, is_dark and C_TEXT_DARK or C_TEXT_LIGHT)
     self.c_border = get_color_flexible({"bordercolor", "border"}, is_dark and C_BORDER_DARK or C_BORDER_LIGHT)
-    self.c_marker = get_color_flexible({"markercolor", "marker"}, is_dark and C_MARKER_DARK or C_MARKER_LIGHT)
-
+    
     -- Highlight color for active editing
     local r, g, b = Colors.hsb(C_ACTIVE_BORDER[1], C_ACTIVE_BORDER[2], C_ACTIVE_BORDER[3])
     self.c_active = {r, g, b}
@@ -130,6 +127,7 @@ function ctgui_numbox:initialize(sel, atoms)
     self.drag_start_val = 0
     self.typing = false
     self.input_buffer = ""
+    self.shift_down = false
 
     -- Clocks
     self.repaint_clock = pd.Clock:new():register(self, "repaint_tick")
@@ -142,6 +140,22 @@ function ctgui_numbox:initialize(sel, atoms)
     self.pending_out_value = nil
     self.pending_out_changed = false
 
+    -- Line Clock
+    self.line_clock = pd.Clock:new():register(self, "line_tick")
+    self.line_running = false
+    self.line_grain = parser:get_float("linegrain", 20)
+    self.default_line_ms = parser:get_float("linems", 0)
+    
+    -- Easing
+    local curve = parser:get_value("reasing curve easing")
+    if type(curve) == "number" then
+        self.default_easing = curve
+    elseif type(curve) == "string" then
+        self.default_easing = curve
+    else
+        self.default_easing = "line"
+    end
+
     -- Controller Input/Output
     self.inlets = 2
     self.outlets = 1
@@ -150,11 +164,242 @@ function ctgui_numbox:initialize(sel, atoms)
     self._raw_repaint = self.repaint
     self.repaint = self.throttled_repaint
 
+    -- Global Key Receiver
+    self.key_receiver = pd.Receive:new():register(self, "luakeys", "receive_key")
+
+    -- Global Focus Receiver
+    self.focus_receiver = pd.Receive:new():register(self, "ctgui_focus", "receive_focus")
+    self.id = tostring(self)
+
     return true
 end
 
 function ctgui_numbox:postinitialize()
     self:set_size(self.width, self.height)
+end
+
+function ctgui_numbox:finalize()
+    if self.key_receiver then self.key_receiver:destruct() end
+    if self.focus_receiver then self.focus_receiver:destruct() end
+end
+
+function ctgui_numbox:get_zero_visual()
+    return 0 -- Not used in numbox but kept for consistency if needed
+end
+
+-- Line Logic
+
+function ctgui_numbox:stop_line()
+    if self.line_running then
+        self.line_clock:unset()
+        self.line_running = false
+    end
+end
+
+function ctgui_numbox:calculate_easing(t, mode, params)
+    if mode == "linear" or mode == "line" then return t end
+    
+    params = params or {}
+    
+    -- Numeric (Power)
+    local mode_num = tonumber(mode)
+    if mode_num then
+        if mode_num == 0 then return t end
+        if mode_num > 0 then return t ^ mode_num end -- Ease In
+        return 1 - ((1 - t) ^ math.abs(mode_num)) -- Ease Out
+    end
+
+    -- Sine
+    if mode == "sine-in" then return 1 - math.cos((t * math.pi) / 2)
+    elseif mode == "sine-out" then return math.sin((t * math.pi) / 2)
+    elseif mode == "sine-inout" then return -(math.cos(math.pi * t) - 1) / 2
+    
+    -- Quad
+    elseif mode == "quad-in" then return t * t
+    elseif mode == "quad-out" then return 1 - (1 - t) * (1 - t)
+    elseif mode == "quad-inout" then return t < 0.5 and 2 * t * t or 1 - ((-2 * t + 2)^2) / 2
+    
+    -- Cubic
+    elseif mode == "cubic-in" then return t * t * t
+    elseif mode == "cubic-out" then return 1 - (1 - t)^3
+    elseif mode == "cubic-inout" then return t < 0.5 and 4 * t * t * t or 1 - ((-2 * t + 2)^3) / 2
+    
+    -- Quart
+    elseif mode == "quart-in" then return t * t * t * t
+    elseif mode == "quart-out" then return 1 - (1 - t)^4
+    elseif mode == "quart-inout" then return t < 0.5 and 8 * t * t * t * t or 1 - ((-2 * t + 2)^4) / 2
+    
+    -- Quint
+    elseif mode == "quint-in" then return t * t * t * t * t
+    elseif mode == "quint-out" then return 1 - (1 - t)^5
+    elseif mode == "quint-inout" then return t < 0.5 and 16 * t * t * t * t * t or 1 - ((-2 * t + 2)^5) / 2
+    
+    -- Sextic (Power of 6)
+    elseif mode == "sextic-in" then return t^6
+    elseif mode == "sextic-out" then return 1 - (1 - t)^6
+    elseif mode == "sextic-inout" then return t < 0.5 and 32 * t^6 or 1 - ((-2 * t + 2)^6) / 2
+    
+    -- Expo
+    elseif mode == "expo-in" then return t == 0 and 0 or 2^(10 * t - 10)
+    elseif mode == "expo-out" then return t == 1 and 1 or 1 - 2^(-10 * t)
+    elseif mode == "expo-inout" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        if t < 0.5 then return (2^(20 * t - 10)) / 2 end
+        return (2 - 2^(-20 * t + 10)) / 2
+    
+    -- Circ
+    elseif mode == "circ-in" then return 1 - math.sqrt(1 - t^2)
+    elseif mode == "circ-out" then return math.sqrt(1 - (t - 1)^2)
+    elseif mode == "circ-inout" then
+        if t < 0.5 then return (1 - math.sqrt(1 - (2 * t)^2)) / 2 end
+        return (math.sqrt(1 - (-2 * t + 2)^2) + 1) / 2
+    
+    -- Back
+    elseif mode == "back-in" then 
+        local c1 = params[1] or 1.70158; local c3 = c1 + 1
+        return c3 * t * t * t - c1 * t * t
+    elseif mode == "back-out" then 
+        local c1 = params[1] or 1.70158; local c3 = c1 + 1
+        return 1 + c3 * (t - 1)^3 + c1 * (t - 1)^2
+    elseif mode == "back-inout" then
+        local c1 = params[1] or 1.70158; local c2 = c1 * 1.525
+        if t < 0.5 then
+            return ((2 * t)^2 * ((c2 + 1) * 2 * t - c2)) / 2
+        end
+        return ((2 * t - 2)^2 * ((c2 + 1) * (t * 2 - 2) + c2) + 2) / 2
+
+    -- Elastic
+    elseif mode == "elastic-in" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        local a = params[1] or 1
+        local p = params[2] or 0.3
+        local s
+        if a < 1 then a = 1; s = p / 4 else s = p / (2 * math.pi) * math.asin(1 / a) end
+        return -(a * 2^(10 * (t - 1)) * math.sin((t - 1 - s) * (2 * math.pi) / p))
+    elseif mode == "elastic-out" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        local a = params[1] or 1
+        local p = params[2] or 0.3
+        local s
+        if a < 1 then a = 1; s = p / 4 else s = p / (2 * math.pi) * math.asin(1 / a) end
+        return a * 2^(-10 * t) * math.sin((t - s) * (2 * math.pi) / p) + 1
+    elseif mode == "elastic-inout" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        local a = params[1] or 1
+        local p = params[2] or 0.45
+        local s
+        if a < 1 then a = 1; s = p / 4 else s = p / (2 * math.pi) * math.asin(1 / a) end
+        t = t * 2
+        if t < 1 then
+            return -0.5 * (a * 2^(10 * (t - 1)) * math.sin((t - 1 - s) * (2 * math.pi) / p))
+        end
+        return a * 2^(-10 * (t - 1)) * math.sin((t - 1 - s) * (2 * math.pi) / p) * 0.5 + 1
+    
+    -- Bounce
+    elseif mode == "bounce-out" then
+        local e = params[1] or 0.5
+        if e < 0 then e = 0.1 end
+        if e >= 1 then e = 0.99 end
+        
+        local t1 = (1 - e) / (1 + e)
+        local k = 1 / (t1 * t1)
+        
+        if t < t1 then
+            return k * t * t
+        end
+        
+        local t_curr = t - t1
+        local duration = 2 * e * t1
+        local height = e * e
+        
+        for i=1, 50 do
+            if t_curr < duration then
+                local half = duration / 2
+                local x = t_curr - half
+                return 1 - height + k * x * x
+            end
+            
+            t_curr = t_curr - duration
+            duration = duration * e
+            height = height * e * e
+            
+            if height < 0.000001 then return 1 end
+        end
+        return 1
+
+    elseif mode == "bounce-in" then return 1 - self:calculate_easing(1 - t, "bounce-out", params)
+    elseif mode == "bounce-inout" then
+        if t < 0.5 then return (1 - self:calculate_easing(1 - 2 * t, "bounce-out", params)) / 2 end
+        return (1 + self:calculate_easing(2 * t - 1, "bounce-out", params)) / 2
+    
+    -- Hann
+    elseif mode == "hann" then return 0.5 * (1 - math.cos(math.pi * t))
+    end
+
+    return t
+end
+
+function ctgui_numbox:start_line(target, time_ms, easing, params)
+    self:stop_line()
+    
+    target = math.max(self.min_val, math.min(self.max_val, target))
+    
+    if time_ms <= 0 then
+        self:in_1_float(target)
+        return
+    end
+    
+    local ticks = math.ceil(time_ms / self.line_grain)
+    if ticks < 1 then ticks = 1 end
+    
+    self.line_target = target
+    self.line_start_val = self.current_value
+    self.line_total_ticks = ticks
+    self.line_current_tick = 0
+    self.line_easing = easing or self.default_easing
+    self.line_easing_params = params or {}
+    
+    self.line_running = true
+    self.line_clock:delay(self.line_grain)
+end
+
+function ctgui_numbox:line_tick()
+    if not self.line_running then return end
+    
+    self.line_current_tick = self.line_current_tick + 1
+    local t = self.line_current_tick / self.line_total_ticks
+    if t > 1 then t = 1 end
+    
+    -- Easing
+    local eased_t = self:calculate_easing(t, self.line_easing, self.line_easing_params)
+    
+    self.current_value = self.line_start_val + (self.line_target - self.line_start_val) * eased_t
+    
+    -- Check bounds/completion
+    local finished = false
+    if self.line_current_tick >= self.line_total_ticks then
+        self.current_value = self.line_target
+        finished = true
+    end
+    
+    self.current_value = math.max(self.min_val, math.min(self.max_val, self.current_value))
+    
+    if self.typing then
+        self.input_buffer = string.format("%g", self.current_value)
+    end
+    
+    self:output_value()
+    self:throttled_repaint()
+    
+    if finished then
+        self.line_running = false
+    else
+        self.line_clock:delay(self.line_grain)
+    end
 end
 
 function ctgui_numbox:in_1_getcode()
@@ -173,24 +418,24 @@ end
 
 -- Interaction (Same as before)
 
-function ctgui_numbox:mouse_down(x, y, button, mod)
-    if button == 1 then -- Left click
-        self.dragging = false
-        self.drag_start_y = y
-        self.drag_start_val = self.current_value
-        self.drag_accumulated_delta = 0
-        if self.typing then
-            self:confirm_typing()
-        end
-        self.potential_drag = true
-        return true
+function ctgui_numbox:mouse_down(x, y)
+    -- pd-lua graphics callbacks only provide x, y. button and mod are nil.
+    self:stop_line()
+    self.dragging = false
+    self.drag_start_y = y
+    self.drag_start_val = self.current_value
+    self.drag_accumulated_delta = 0
+    if self.typing then
+        self:confirm_typing()
     end
+    self.potential_drag = true
+    return true
 end
 
-function ctgui_numbox:mouse_drag(x, y, button, mod)
+function ctgui_numbox:mouse_drag(x, y)
     if self.potential_drag then
         local dy = self.drag_start_y - y
-        if math.abs(dy) > 2 then
+        if math.abs(dy) > 1 then -- Reduced threshold
             self.dragging = true
             self.potential_drag = false
         end
@@ -199,8 +444,9 @@ function ctgui_numbox:mouse_drag(x, y, button, mod)
     if self.dragging then
         local dy = self.drag_start_y - y
         local scale = 1.0
-        local shift = (mod == 1)
-        if shift then scale = 0.01 else scale = 1.0 end
+        -- Modifiers are not passed by pd-lua currently, so shift-drag is disabled for now
+        -- local shift = (mod == 1)
+        -- if shift then scale = 0.01 else scale = 1.0 end
         local delta_val = (dy * scale)
         local new_val = self.drag_start_val + delta_val
         self.current_value = math.max(self.min_val, math.min(self.max_val, new_val))
@@ -209,7 +455,7 @@ function ctgui_numbox:mouse_drag(x, y, button, mod)
     end
 end
 
-function ctgui_numbox:mouse_up(x, y, button, mod)
+function ctgui_numbox:mouse_up(x, y)
     if self.potential_drag and not self.dragging then
         self:start_typing()
     end
@@ -218,10 +464,22 @@ function ctgui_numbox:mouse_up(x, y, button, mod)
 end
 
 function ctgui_numbox:start_typing()
+    pd.send("ctgui_focus", "claim", {self.id})
     self.typing = true
     self.input_buffer = string.format("%g", self.current_value)
     self:throttled_repaint()
-    pd.post("ctgui.numbox: Input mode active.")
+    -- pd.post("ctgui.numbox: Input mode active.")
+end
+
+function ctgui_numbox:receive_focus(sel, atoms)
+    if sel == "claim" then
+        local sender_id = atoms[1]
+        if sender_id ~= self.id then
+            if self.typing then
+                self:confirm_typing()
+            end
+        end
+    end
 end
 
 function ctgui_numbox:confirm_typing()
@@ -239,9 +497,60 @@ function ctgui_numbox:cancel_typing()
     self:throttled_repaint()
 end
 
+function ctgui_numbox:receive_key(sel, atoms)
+    if sel == "list" and #atoms >= 2 then
+        local state = atoms[1]
+        local keyname = tostring(atoms[2])
+        if type(state) == "number" then
+            self:handle_key_name(state, keyname)
+        end
+    end
+end
+
+function ctgui_numbox:handle_key_name(state, keyname)
+    -- Track modifiers
+    if keyname == "Shift_L" or keyname == "Shift_R" then
+        self.shift_down = (state ~= 0)
+        return
+    end
+
+    -- Only process Key Down (state > 0) for typing
+    if state == 0 then return end
+
+    if not self.typing then return end
+
+    if keyname == "Return" or keyname == "Enter" then
+        self:confirm_typing()
+    elseif keyname == "Escape" then
+        self:cancel_typing()
+    elseif keyname == "BackSpace" then
+        if #self.input_buffer > 0 then
+            self.input_buffer = self.input_buffer:sub(1, -2)
+            self:throttled_repaint()
+        end
+    else
+        -- Character mapping
+        local char = nil
+        if keyname:match("^%d$") then -- 0-9
+            char = keyname
+        elseif keyname == "period" or keyname == "." then
+            char = "."
+        elseif keyname == "minus" or keyname == "-" then
+            char = "-"
+        elseif keyname == "e" or keyname == "E" then
+            char = self.shift_down and "E" or "e"
+        end
+
+        if char then
+             self.input_buffer = self.input_buffer .. char
+             self:throttled_repaint()
+        end
+    end
+end
+
 function ctgui_numbox:in_1_key(keycode)
     if not self.typing then return end
-    if keycode == 13 then -- Enter
+    if keycode == 13 or keycode == 10 then -- Enter
         self:confirm_typing()
     elseif keycode == 27 then -- Esc
         self:cancel_typing()
@@ -259,7 +568,36 @@ function ctgui_numbox:in_1_key(keycode)
     end
 end
 
+function ctgui_numbox:in_1_list(atoms)
+    if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
+        if #atoms >= 2 and type(atoms[2]) == "number" and atoms[2] > 0 then
+            local easing = nil
+            local params = nil
+            if #atoms >= 3 then easing = atoms[3] end
+            if #atoms >= 4 then
+                params = {}
+                for i=4, #atoms do table.insert(params, atoms[i]) end
+            end
+            self:start_line(atoms[1], atoms[2], easing, params)
+        else
+            if self.default_line_ms > 0 then
+                self:start_line(atoms[1], self.default_line_ms)
+            else
+                self:in_1_float(atoms[1])
+            end
+        end
+    elseif type(atoms) == "number" then
+        self:in_1_float(atoms)
+    end
+end
+
 function ctgui_numbox:in_1_float(f)
+    if self.default_line_ms > 0 then
+        self:start_line(f, self.default_line_ms)
+        return
+    end
+
+    self:stop_line()
     self.current_value = math.max(self.min_val, math.min(self.max_val, f))
     if self.typing then
         self.input_buffer = string.format("%g", self.current_value)
@@ -269,11 +607,41 @@ function ctgui_numbox:in_1_float(f)
 end
 
 function ctgui_numbox:in_1_set(f)
+    self:stop_line()
     self.current_value = math.max(self.min_val, math.min(self.max_val, f))
     if self.typing then
         self.input_buffer = string.format("%g", self.current_value)
     end
     self:throttled_repaint()
+end
+
+function ctgui_numbox:in_1_linems(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" then
+        self.default_line_ms = math.max(0, f)
+    end
+end
+
+function ctgui_numbox:in_1_linegrain(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" then
+        self.line_grain = math.max(1, f)
+    end
+end
+
+function ctgui_numbox:in_1_reasing(atoms)
+    local v = type(atoms) == "table" and atoms[1] or atoms
+    if type(v) == "number" or type(v) == "string" then
+        self.default_easing = v
+    end
+end
+
+function ctgui_numbox:in_1_curve(atoms)
+    self:in_1_reasing(atoms)
+end
+
+function ctgui_numbox:in_1_easing(atoms)
+    self:in_1_reasing(atoms)
 end
 
 function ctgui_numbox:in_2_float(f)
@@ -354,52 +722,16 @@ function ctgui_numbox:paint(g)
     if not self.c_bg then self.c_bg = {237, 237, 237} end
     if not self.c_text then self.c_text = {0, 0, 0} end
     if not self.c_border then self.c_border = {100, 100, 100} end
-    if not self.c_marker then self.c_marker = {100, 100, 100} end
     if not self.c_active then self.c_active = {255, 0, 0} end
 
     -- Draw Rounded Box (Border)
     local border_color = self.typing and self.c_active or self.c_border
     g:set_color(border_color[1], border_color[2], border_color[3])
-    g:fill_rounded_rect(0, 0, self.width, self.height, 4)
+    g:fill_rounded_rect(0, 0, self.width+2, self.height+2, 1)
 
     -- Draw Background (Inside, slightly smaller to show border)
     g:set_color(self.c_bg[1], self.c_bg[2], self.c_bg[3])
-    g:fill_rounded_rect(1, 1, self.width - 2, self.height - 2, 3)
-
-    -- Draw Inlet/Outlet Markers (Semi-circles)
-    g:set_color(self.c_marker[1], self.c_marker[2], self.c_marker[3])
-
-    -- Top Marker (Inlet) - approx 20% from left based on image?
-    -- Or maybe just standard Pd position?
-    -- Image has it slightly left of center.
-    local marker_x = 10 -- Offset
-    local marker_r = 4
-    g:fill_arc(marker_x, 0, marker_r * 2, marker_r * 2, 0, 180) -- Wait, arc arguments?
-    -- pd-lua Graphics: fill_arc(x, y, w, h, start_angle, extent_angle)
-    -- We want top half circle. Y=0.
-    -- Actually, if we draw at y=0, half is clipped?
-    -- No, the image shows them "biting" into the box.
-    -- Let's draw them ON TOP of the background.
-    -- Top one: A semi-circle pointing DOWN? No, image shows dark semi-circle at the edge.
-    -- It looks like a notch.
-    -- Let's draw a semi-circle at the top edge.
-    g:fill_arc(marker_x, -marker_r, marker_r * 2, marker_r * 2, 180, 180) -- Bottom half of circle?
-    -- If y = -r, center is at 0.
-
-    -- Bottom Marker (Outlet)
-    g:fill_arc(marker_x, self.height - marker_r, marker_r * 2, marker_r * 2, 0, 180) -- Top half of circle?
-
-    -- Corner Notch (Top Right)
-    local notch_size = 6
-    g:set_color(self.c_marker[1], self.c_marker[2], self.c_marker[3]) -- Same color as markers? Or border?
-    -- The image shows a greyish triangle. Let's use border color for now or marker color.
-    -- It seems to be an unfilled area or a filled triangle?
-    -- Image: darker grey triangle in top right.
-    g:fill_polygon(
-        self.width - notch_size, 0,
-        self.width, 0,
-        self.width, notch_size
-    )
+    g:fill_rounded_rect(1, 1, self.width , self.height , 1)
 
     -- Draw Text
     g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])
