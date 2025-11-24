@@ -1,46 +1,94 @@
-1. Mensagem de Animação (O método "One-Shot")
-Esta é a forma mais comum. Você envia uma lista com 3 elementos para o primeiro inlet:
-[ValorAlvo Tempo(ms) NomeDaCurva]
-Exemplos de mensagens (message boxes):
-Movimento Suave (Cubic): Ir para 0.8 em 1 segundo.
-code
-Text
-0.8 1000 cubic-out
-Efeito Elástico (Back): Ir para -10dB (no modo db) com um pequeno "overshoot" (passa um pouco e volta).
-code
-Text
--10 600 back-out
-Efeito de Pulo (Bounce): Simular um objeto caindo e quicando no zero.
-code
-Text
-0 1500 bounce-out
-Aceleração Exponencial: Começar muito devagar e acelerar no final (útil para fade-outs dramáticos).
-code
-Text
-0 2000 expo-in
-2. Definir o Padrão (Global)
-Se você quiser definir um tipo de curva e depois apenas enviar valores e tempos sem repetir o nome da curva, use a mensagem curve.
-Envie: curve back-out
-Agora envie: 0.5 1000 (Isso usará back-out automaticamente).
-3. Tabela de Nomes Disponíveis
-Aqui estão todas as strings que você pode usar na terceira posição da lista.
-Nota: Se você escrever apenas o nome base (ex: cubic), o código assume automaticamente o modo -inout.
-Família	Nomes (Sufixos: -in, -out, -inout)	Sensação / Uso em UX
-Linear	linear, lin	Robótico, mecânico. Sem aceleração.
-Sine	sine-in, sine-out, sine-inout	Suave, "padrão". Bom para fades de áudio.
-Quad	quad-in, quad-out, quad-inout	Aceleração leve (Potência de 2).
-Cubic	cubic-in, cubic-out, cubic-inout	O favorito para UI. Movimento natural.
-Quart	quart-in, quart-out, quart-inout	Mais acentuado que o Cubic.
-Quint	quint-in, quint-out, quint-inout	Muito rápido no meio, parada suave.
-Expo	expo-in, expo-out, expo-inout	Dramático. Bom para zooms ou entradas rápidas.
-Circ	circ-in, circ-out, circ-inout	Rápido, mas "arredondado".
-Back	back-in, back-out, back-inout	Elástico. Passa do alvo e volta. Ótimo para dar "peso".
-Bounce	bounce-in, bounce-out, bounce-inout	Quicar. A bola bate e quica até parar.
-Dicas de UX para escolher a direção (in vs out)
-Use -out (Ex: cubic-out, back-out):
-Quando o objeto entra na tela ou se move para uma posição final.
-O movimento começa rápido (resposta imediata ao clique) e desacelera suavemente até parar. É o que "parece certo" para 90% dos sliders de interface.
-Use -in (Ex: cubic-in):
-Quando o objeto está saindo da tela. Ele começa devagar e acelera até sumir.
-Use -inout (Ex: sine-inout):
-Para loops ou automações contínuas (ex: um LFO visual). Evita mudanças bruscas de direção.
+# ctgui.slider Easing Functions
+
+The `ctgui.slider` object supports a wide range of easing functions for smooth transitions (ramps) between values. These can be used to create natural motion, audio fades, or control signal modulation.
+
+## Usage
+
+### 1. Instantiation
+You can set the default easing curve when creating the object using the `@reasing` flag (or its aliases `@curve`, `@easing`).
+
+```pd
+[ctgui.slider @reasing sine-in]
+[ctgui.slider @reasing -3]  ; Ease-Out Cubic
+```
+
+### 2. Setting Default Easing
+You can change the default easing curve dynamically by sending a `reasing` message. This affects all subsequent ramps that do not specify an explicit easing type.
+
+```pd
+[reasing bounce-out(
+|
+[ctgui.slider]
+```
+
+### 3. Triggering Ramps
+To trigger a ramp, send a list to the first inlet (for direct value) or second inlet (for normalized 0-1 control).
+Format: `[target_value time_ms (easing_type) (param1) (param2) ...]`
+
+- **Standard Ramp:** Uses default easing.
+  ```pd
+  [0.5 1000(  ; Go to 0.5 over 1000ms
+  ```
+
+- **Specific Easing:** Overrides default easing for this ramp.
+  ```pd
+  [0.5 1000 elastic-out(
+  ```
+
+- **Easing with Parameters:** Some curves accept extra parameters.
+  ```pd
+  [0.5 1000 back-out 3(      ; Back-out with overshoot of 3
+  [0.5 1000 elastic-out 1 0.5( ; Elastic-out with Amp=1, Period=0.5
+  [0.5 1000 bounce-out 0.8(    ; Bounce-out with high elasticity (0.8)
+  ```
+
+---
+
+## Supported Easing Types
+
+### Linear
+- `linear`, `line`, `0`: Constant speed.
+
+### Numeric (Power Functions)
+- **Positive Numbers (e.g., `3`, `2.5`)**: Ease-In (accelerates). Formula: $t^n$
+- **Negative Numbers (e.g., `-3`, `-2.5`)**: Ease-Out (decelerates). Formula: $1 - (1-t)^{|n|}$
+
+### Standard Penner Equations
+These functions offer standard animation curves. Available variants: `-in`, `-out`, `-inout`.
+
+- **Sine**: `sine-in`, `sine-out`, `sine-inout`
+- **Quad** (Power of 2): `quad-in`, `quad-out`, `quad-inout`
+- **Cubic** (Power of 3): `cubic-in`, `cubic-out`, `cubic-inout`
+- **Quart** (Power of 4): `quart-in`, `quart-out`, `quart-inout`
+- **Quint** (Power of 5): `quint-in`, `quint-out`, `quint-inout`
+- **Sextic** (Power of 6): `sextic-in`, `sextic-out`, `sextic-inout`
+- **Expo** (Exponential): `expo-in`, `expo-out`, `expo-inout`
+- **Circ** (Circular): `circ-in`, `circ-out`, `circ-inout`
+
+### Special Effects
+
+#### Back
+Overshoots the target value before settling.
+- Types: `back-in`, `back-out`, `back-inout`
+- **Parameters:**
+  1. `overshoot` (default: 1.70158). Higher values increase the overshoot distance.
+
+#### Elastic
+Simulates an elastic band.
+- Types: `elastic-in`, `elastic-out`, `elastic-inout`
+- **Parameters:**
+  1. `amplitude` (default: 1). Magnitude of the oscillation.
+  2. `period` (default: 0.3). Duration of one oscillation cycle.
+
+#### Bounce
+Simulates a bouncing ball.
+- Types: `bounce-in`, `bounce-out`, `bounce-inout`
+- **Parameters:**
+  1. `elasticity` (default: 0.5). Controls energy preservation (0.0 to <1.0).
+     - `0.5`: Standard bounce.
+     - `0.8`: Super bouncy (rubber).
+     - `0.2`: Heavy (lead).
+
+#### Windowing
+- **Hann**: `hann`. Smooth S-curve based on the Hanning window (Cosine).
+

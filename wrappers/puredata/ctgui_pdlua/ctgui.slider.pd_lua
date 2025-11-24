@@ -448,8 +448,10 @@ function ctgui_slider:stop_line()
     end
 end
 
-function ctgui_slider:calculate_easing(t, mode)
+function ctgui_slider:calculate_easing(t, mode, params)
     if mode == "linear" or mode == "line" then return t end
+    
+    params = params or {}
     
     -- Numeric (Power)
     local mode_num = tonumber(mode)
@@ -507,29 +509,86 @@ function ctgui_slider:calculate_easing(t, mode)
     
     -- Back
     elseif mode == "back-in" then 
-        local c1 = 1.70158; local c3 = c1 + 1
+        local c1 = params[1] or 1.70158; local c3 = c1 + 1
         return c3 * t * t * t - c1 * t * t
     elseif mode == "back-out" then 
-        local c1 = 1.70158; local c3 = c1 + 1
+        local c1 = params[1] or 1.70158; local c3 = c1 + 1
         return 1 + c3 * (t - 1)^3 + c1 * (t - 1)^2
     elseif mode == "back-inout" then
-        local c1 = 1.70158; local c2 = c1 * 1.525
+        local c1 = params[1] or 1.70158; local c2 = c1 * 1.525
         if t < 0.5 then
             return ((2 * t)^2 * ((c2 + 1) * 2 * t - c2)) / 2
         end
         return ((2 * t - 2)^2 * ((c2 + 1) * (t * 2 - 2) + c2) + 2) / 2
+
+    -- Elastic
+    elseif mode == "elastic-in" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        local a = params[1] or 1
+        local p = params[2] or 0.3
+        local s
+        if a < 1 then a = 1; s = p / 4 else s = p / (2 * math.pi) * math.asin(1 / a) end
+        return -(a * 2^(10 * (t - 1)) * math.sin((t - 1 - s) * (2 * math.pi) / p))
+    elseif mode == "elastic-out" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        local a = params[1] or 1
+        local p = params[2] or 0.3
+        local s
+        if a < 1 then a = 1; s = p / 4 else s = p / (2 * math.pi) * math.asin(1 / a) end
+        return a * 2^(-10 * t) * math.sin((t - s) * (2 * math.pi) / p) + 1
+    elseif mode == "elastic-inout" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        local a = params[1] or 1
+        local p = params[2] or 0.45
+        local s
+        if a < 1 then a = 1; s = p / 4 else s = p / (2 * math.pi) * math.asin(1 / a) end
+        t = t * 2
+        if t < 1 then
+            return -0.5 * (a * 2^(10 * (t - 1)) * math.sin((t - 1 - s) * (2 * math.pi) / p))
+        end
+        return a * 2^(-10 * (t - 1)) * math.sin((t - 1 - s) * (2 * math.pi) / p) * 0.5 + 1
     
     -- Bounce
     elseif mode == "bounce-out" then
-        local n1 = 7.5625; local d1 = 2.75
-        if t < 1 / d1 then return n1 * t * t
-        elseif t < 2 / d1 then t = t - 1.5 / d1; return n1 * t * t + 0.75
-        elseif t < 2.5 / d1 then t = t - 2.25 / d1; return n1 * t * t + 0.9375
-        else t = t - 2.625 / d1; return n1 * t * t + 0.984375 end
-    elseif mode == "bounce-in" then return 1 - self:calculate_easing(1 - t, "bounce-out")
+        local e = params[1] or 0.5
+        -- Clamp elasticity to reasonable bounds
+        if e < 0 then e = 0.1 end
+        if e >= 1 then e = 0.99 end
+        
+        local t1 = (1 - e) / (1 + e)
+        local k = 1 / (t1 * t1)
+        
+        if t < t1 then
+            return k * t * t
+        end
+        
+        local t_curr = t - t1
+        local duration = 2 * e * t1
+        local height = e * e
+        
+        -- Simulate bounces
+        for i=1, 50 do
+            if t_curr < duration then
+                local half = duration / 2
+                local x = t_curr - half
+                return 1 - height + k * x * x
+            end
+            
+            t_curr = t_curr - duration
+            duration = duration * e
+            height = height * e * e
+            
+            if height < 0.000001 then return 1 end
+        end
+        return 1
+
+    elseif mode == "bounce-in" then return 1 - self:calculate_easing(1 - t, "bounce-out", params)
     elseif mode == "bounce-inout" then
-        if t < 0.5 then return (1 - self:calculate_easing(1 - 2 * t, "bounce-out")) / 2 end
-        return (1 + self:calculate_easing(2 * t - 1, "bounce-out")) / 2
+        if t < 0.5 then return (1 - self:calculate_easing(1 - 2 * t, "bounce-out", params)) / 2 end
+        return (1 + self:calculate_easing(2 * t - 1, "bounce-out", params)) / 2
     
     -- Hann
     elseif mode == "hann" then return 0.5 * (1 - math.cos(math.pi * t))
@@ -538,7 +597,7 @@ function ctgui_slider:calculate_easing(t, mode)
     return t
 end
 
-function ctgui_slider:start_line(target, time_ms, easing)
+function ctgui_slider:start_line(target, time_ms, easing, params)
     self:stop_line()
     
     target = math.max(self.min_val, math.min(self.max_val, target))
@@ -556,6 +615,7 @@ function ctgui_slider:start_line(target, time_ms, easing)
     self.line_total_ticks = ticks
     self.line_current_tick = 0
     self.line_easing = easing or self.default_easing
+    self.line_easing_params = params or {}
     
     self.line_running = true
     self.line_clock:delay(self.line_grain)
@@ -569,7 +629,7 @@ function ctgui_slider:line_tick()
     if t > 1 then t = 1 end
     
     -- Easing
-    local eased_t = self:calculate_easing(t, self.line_easing)
+    local eased_t = self:calculate_easing(t, self.line_easing, self.line_easing_params)
     -- "line" or 0 or unknown -> linear (t)
     
     self.current_value = self.line_start_val + (self.line_target - self.line_start_val) * eased_t
@@ -600,8 +660,13 @@ function ctgui_slider:in_1_list(atoms)
     if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
         if #atoms >= 2 and type(atoms[2]) == "number" and atoms[2] > 0 then
             local easing = nil
+            local params = nil
             if #atoms >= 3 then easing = atoms[3] end
-            self:start_line(atoms[1], atoms[2], easing)
+            if #atoms >= 4 then
+                params = {}
+                for i=4, #atoms do table.insert(params, atoms[i]) end
+            end
+            self:start_line(atoms[1], atoms[2], easing, params)
         else
             if self.default_line_ms > 0 then
                 self:start_line(atoms[1], self.default_line_ms)
@@ -646,8 +711,13 @@ function ctgui_slider:in_2_list(atoms)
             norm = math.max(0, math.min(1, norm))
             local target = self:visual_to_value(norm)
             local easing = nil
+            local params = nil
             if #atoms >= 3 then easing = atoms[3] end
-            self:start_line(target, atoms[2], easing)
+            if #atoms >= 4 then
+                params = {}
+                for i=4, #atoms do table.insert(params, atoms[i]) end
+            end
+            self:start_line(target, atoms[2], easing, params)
         else
             self:in_2_float(atoms[1])
         end
