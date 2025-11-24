@@ -644,6 +644,44 @@ static void torch_arr_player_anything(t_torch_arr_player *x, t_symbol *s, int ar
         return;
     }
     
+    // Set array basename
+    if (s == gensym("array") || s == gensym("set")) {
+        if (argc > 0 && argv[0].a_type == A_SYMBOL) {
+            std::string new_base = argv[0].a_w.w_symbol->s_name;
+            x->x_array_basename = new_base;
+            
+            // Update names
+            for (int i = 0; i < x->x_n_channels; ++i) {
+                std::string name = x->x_array_basename + "-" + std::to_string(i);
+                x->x_array_names[i] = gensym(name.c_str());
+            }
+            
+            // Check arrays to update info immediately
+            check_arrays(x);
+            
+            // Update file frames estimate from array size (use first channel)
+            if (x->x_n_channels > 0 && x->x_array_sizes[0] > 0) {
+                x->x_file_frames = x->x_array_sizes[0];
+            }
+            
+            post("torch.arr.player~: Set array basename to '%s'", new_base.c_str());
+        } else {
+            pd_error(x, "torch.arr.player~: array requires a symbol");
+        }
+        return;
+    }
+
+    // Set SR
+    if (s == gensym("sr")) {
+        if (argc > 0) {
+            float sr = atom_getfloat(argv);
+            if (sr > 0) {
+                x->x_file_sr = sr;
+            }
+        }
+        return;
+    }
+    
     // Fallback to ArgParser only if it looks like a flag-based message (starts with -)
     // But usually 'anything' receives the selector as 's'.
     // If the user sends "-file foo.wav", s is "-file".
