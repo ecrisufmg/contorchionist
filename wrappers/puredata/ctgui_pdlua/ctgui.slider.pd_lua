@@ -204,7 +204,8 @@ function ctgui_slider:initialize(sel, atoms)
     -- Line Clock
     self.line_clock = pd.Clock:new():register(self, "line_tick")
     self.line_running = false
-    self.line_grain = 20 -- ms
+    self.line_grain = parser:get_float("linegrain", 20)
+    self.default_line_ms = parser:get_float("linems", 0)
 
     -- Controller Input/Output
     -- Default to normalized 0-1
@@ -491,7 +492,11 @@ function ctgui_slider:in_1_list(atoms)
         if #atoms >= 2 and type(atoms[2]) == "number" and atoms[2] > 0 then
             self:start_line(atoms[1], atoms[2])
         else
-            self:in_1_float(atoms[1])
+            if self.default_line_ms > 0 then
+                self:start_line(atoms[1], self.default_line_ms)
+            else
+                self:in_1_float(atoms[1])
+            end
         end
     elseif type(atoms) == "number" then
         self:in_1_float(atoms)
@@ -499,6 +504,11 @@ function ctgui_slider:in_1_list(atoms)
 end
 
 function ctgui_slider:in_1_float(f)
+    if self.default_line_ms > 0 then
+        self:start_line(f, self.default_line_ms)
+        return
+    end
+
     self:stop_line()
     self.current_value = math.max(self.min_val, math.min(self.max_val, f))
     self:update_visual_from_value()
@@ -608,7 +618,19 @@ function ctgui_slider:in_1_datashutter(atoms)
     self:in_1_datafps(atoms)
 end
 
+function ctgui_slider:in_1_linems(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" then
+        self.default_line_ms = math.max(0, f)
+    end
+end
 
+function ctgui_slider:in_1_linegrain(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" then
+        self.line_grain = math.max(1, f)
+    end
+end
 
 function ctgui_slider:data_tick()
     self.data_clock_running = false
