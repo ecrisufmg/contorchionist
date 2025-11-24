@@ -123,8 +123,8 @@ function ctgui_numbox:initialize(sel, atoms)
     self.current_value = math.max(self.min_val, math.min(self.max_val, self.current_value))
 
     self.dragging = false
-    self.drag_start_y = 0
-    self.drag_start_val = 0
+    self.last_drag_y = 0
+    self.last_drag_x = 0
     self.typing = false
     self.input_buffer = ""
     self.shift_down = false
@@ -418,13 +418,53 @@ end
 
 -- Interaction (Same as before)
 
+function ctgui_numbox:get_cursor_info(x)
+    local val = self.current_value
+    -- Base string for calculation (ensure it has a dot)
+    local base_s = string.format("%.5f", val):gsub("0+$", ""):gsub("%.$", "")
+    if not base_s:find("%.") then base_s = base_s .. "." end
+    
+    local dot_pos = base_s:find("%.")
+    local char_w = self.fontsize * 0.54
+    local start_x = 4
+    local rel_x = x - start_x
+    local idx = math.floor(rel_x / char_w) + 1
+    
+    if idx < 1 then idx = 1 end
+    
+    local power = 0
+    local display_s = base_s
+    
+    -- Calculate power
+    if idx < dot_pos then
+        power = (dot_pos - 1) - idx
+    elseif idx == dot_pos then
+        power = 0 -- Cursor on dot
+    else
+        power = dot_pos - idx
+    end
+    
+    -- Extend string if cursor is past the end
+    if idx > #base_s then
+        local target_decimals = idx - dot_pos
+        if target_decimals < 0 then target_decimals = 0 end
+        display_s = string.format("%." .. target_decimals .. "f", val)
+    end
+    
+    return {
+        power = power,
+        rect_x = start_x + (idx - 1) * char_w,
+        rect_w = char_w,
+        display_s = display_s
+    }
+end
+
 function ctgui_numbox:mouse_down(x, y)
     -- pd-lua graphics callbacks only provide x, y. button and mod are nil.
     self:stop_line()
     self.dragging = false
-    self.drag_start_y = y
-    self.drag_start_val = self.current_value
-    self.drag_accumulated_delta = 0
+    self.last_drag_y = y
+    self.last_drag_x = x
     if self.typing then
         self:confirm_typing()
     end
@@ -434,7 +474,7 @@ end
 
 function ctgui_numbox:mouse_drag(x, y)
     if self.potential_drag then
-        local dy = self.drag_start_y - y
+        local dy = self.last_drag_y - y
         if math.abs(dy) > 1 then -- Reduced threshold
             self.dragging = true
             self.potential_drag = false
@@ -442,14 +482,25 @@ function ctgui_numbox:mouse_drag(x, y)
     end
 
     if self.dragging then
-        local dy = self.drag_start_y - y
+        local dy = self.last_drag_y - y
         local scale = 1.0
-        -- Modifiers are not passed by pd-lua currently, so shift-drag is disabled for now
-        -- local shift = (mod == 1)
-        -- if shift then scale = 0.01 else scale = 1.0 end
+        
+        if self.shift_down then
+            local info = self:get_cursor_info(x)
+            scale = 10 ^ info.power
+            -- Slower interaction for fine tuning? 
+            -- Usually 1px = 1 unit is too fast for high powers, but okay for decimals.
+            -- Let's dampen it slightly for usability
+            -- scale = scale * 0.5 
+        end
+
         local delta_val = (dy * scale)
-        local new_val = self.drag_start_val + delta_val
+        local new_val = self.current_value + delta_val
         self.current_value = math.max(self.min_val, math.min(self.max_val, new_val))
+        
+        self.last_drag_y = y
+        self.last_drag_x = x
+        
         self:output_value()
         self:throttled_repaint()
     end
@@ -736,9 +787,22 @@ function ctgui_numbox:paint(g)
     -- Draw Text
     g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])
 
+    -- Use the 5th argument for font size!
+    local font_size = self.fontsize
+
     local text_to_draw
     if self.typing then
         text_to_draw = self.input_buffer .. "_"
+    elseif self.dragging and self.shift_down then
+        local info = self:get_cursor_info(self.last_drag_x)
+        text_to_draw = info.display_s
+        
+        -- Draw highlight box for active digit
+        g:set_color(self.c_active[1], self.c_active[2], self.c_active[3]) -- Active color
+        g:fill_rect(info.rect_x, (self.height - font_size)/2, info.rect_w, font_size)
+        
+        -- Reset text color
+        g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])
     else
         local v = self.current_value
         if math.abs(v) < 0.0001 and v ~= 0 then
@@ -753,8 +817,6 @@ function ctgui_numbox:paint(g)
 
     -- Left aligned, vertically centered
     local text_x = 4
-    -- Use the 5th argument for font size!
-    local font_size = self.fontsize
     local text_y = (self.height - font_size) / 2
 
     g:draw_text(text_to_draw, text_x, text_y, self.width - text_x, font_size)
