@@ -208,7 +208,7 @@ function ctgui_slider:initialize(sel, atoms)
     self.default_line_ms = parser:get_float("linems", 0)
     
     -- Easing
-    local curve = parser:get_value("curve easing")
+    local curve = parser:get_value("reasing curve easing")
     if type(curve) == "number" then
         self.default_easing = curve
     elseif type(curve) == "string" then
@@ -448,6 +448,96 @@ function ctgui_slider:stop_line()
     end
 end
 
+function ctgui_slider:calculate_easing(t, mode)
+    if mode == "linear" or mode == "line" then return t end
+    
+    -- Numeric (Power)
+    local mode_num = tonumber(mode)
+    if mode_num then
+        if mode_num == 0 then return t end
+        if mode_num > 0 then return t ^ mode_num end -- Ease In
+        return 1 - ((1 - t) ^ math.abs(mode_num)) -- Ease Out
+    end
+
+    -- Sine
+    if mode == "sine-in" then return 1 - math.cos((t * math.pi) / 2)
+    elseif mode == "sine-out" then return math.sin((t * math.pi) / 2)
+    elseif mode == "sine-inout" then return -(math.cos(math.pi * t) - 1) / 2
+    
+    -- Quad
+    elseif mode == "quad-in" then return t * t
+    elseif mode == "quad-out" then return 1 - (1 - t) * (1 - t)
+    elseif mode == "quad-inout" then return t < 0.5 and 2 * t * t or 1 - ((-2 * t + 2)^2) / 2
+    
+    -- Cubic
+    elseif mode == "cubic-in" then return t * t * t
+    elseif mode == "cubic-out" then return 1 - (1 - t)^3
+    elseif mode == "cubic-inout" then return t < 0.5 and 4 * t * t * t or 1 - ((-2 * t + 2)^3) / 2
+    
+    -- Quart
+    elseif mode == "quart-in" then return t * t * t * t
+    elseif mode == "quart-out" then return 1 - (1 - t)^4
+    elseif mode == "quart-inout" then return t < 0.5 and 8 * t * t * t * t or 1 - ((-2 * t + 2)^4) / 2
+    
+    -- Quint
+    elseif mode == "quint-in" then return t * t * t * t * t
+    elseif mode == "quint-out" then return 1 - (1 - t)^5
+    elseif mode == "quint-inout" then return t < 0.5 and 16 * t * t * t * t * t or 1 - ((-2 * t + 2)^5) / 2
+    
+    -- Sextic (Power of 6)
+    elseif mode == "sextic-in" then return t^6
+    elseif mode == "sextic-out" then return 1 - (1 - t)^6
+    elseif mode == "sextic-inout" then return t < 0.5 and 32 * t^6 or 1 - ((-2 * t + 2)^6) / 2
+    
+    -- Expo
+    elseif mode == "expo-in" then return t == 0 and 0 or 2^(10 * t - 10)
+    elseif mode == "expo-out" then return t == 1 and 1 or 1 - 2^(-10 * t)
+    elseif mode == "expo-inout" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        if t < 0.5 then return (2^(20 * t - 10)) / 2 end
+        return (2 - 2^(-20 * t + 10)) / 2
+    
+    -- Circ
+    elseif mode == "circ-in" then return 1 - math.sqrt(1 - t^2)
+    elseif mode == "circ-out" then return math.sqrt(1 - (t - 1)^2)
+    elseif mode == "circ-inout" then
+        if t < 0.5 then return (1 - math.sqrt(1 - (2 * t)^2)) / 2 end
+        return (math.sqrt(1 - (-2 * t + 2)^2) + 1) / 2
+    
+    -- Back
+    elseif mode == "back-in" then 
+        local c1 = 1.70158; local c3 = c1 + 1
+        return c3 * t * t * t - c1 * t * t
+    elseif mode == "back-out" then 
+        local c1 = 1.70158; local c3 = c1 + 1
+        return 1 + c3 * (t - 1)^3 + c1 * (t - 1)^2
+    elseif mode == "back-inout" then
+        local c1 = 1.70158; local c2 = c1 * 1.525
+        if t < 0.5 then
+            return ((2 * t)^2 * ((c2 + 1) * 2 * t - c2)) / 2
+        end
+        return ((2 * t - 2)^2 * ((c2 + 1) * (t * 2 - 2) + c2) + 2) / 2
+    
+    -- Bounce
+    elseif mode == "bounce-out" then
+        local n1 = 7.5625; local d1 = 2.75
+        if t < 1 / d1 then return n1 * t * t
+        elseif t < 2 / d1 then t = t - 1.5 / d1; return n1 * t * t + 0.75
+        elseif t < 2.5 / d1 then t = t - 2.25 / d1; return n1 * t * t + 0.9375
+        else t = t - 2.625 / d1; return n1 * t * t + 0.984375 end
+    elseif mode == "bounce-in" then return 1 - self:calculate_easing(1 - t, "bounce-out")
+    elseif mode == "bounce-inout" then
+        if t < 0.5 then return (1 - self:calculate_easing(1 - 2 * t, "bounce-out")) / 2 end
+        return (1 + self:calculate_easing(2 * t - 1, "bounce-out")) / 2
+    
+    -- Hann
+    elseif mode == "hann" then return 0.5 * (1 - math.cos(math.pi * t))
+    end
+
+    return t
+end
+
 function ctgui_slider:start_line(target, time_ms, easing)
     self:stop_line()
     
@@ -479,21 +569,7 @@ function ctgui_slider:line_tick()
     if t > 1 then t = 1 end
     
     -- Easing
-    local eased_t = t
-    local mode = self.line_easing
-    local mode_num = tonumber(mode)
-    
-    if mode == "hann" then
-        eased_t = 0.5 * (1 - math.cos(math.pi * t))
-    elseif mode_num and mode_num ~= 0 then
-        if mode_num > 0 then
-            -- Ease In
-            eased_t = t ^ mode_num
-        else
-            -- Ease Out
-            eased_t = 1 - ((1 - t) ^ math.abs(mode_num))
-        end
-    end
+    local eased_t = self:calculate_easing(t, self.line_easing)
     -- "line" or 0 or unknown -> linear (t)
     
     self.current_value = self.line_start_val + (self.line_target - self.line_start_val) * eased_t
@@ -686,15 +762,19 @@ function ctgui_slider:in_1_linegrain(atoms)
     end
 end
 
-function ctgui_slider:in_1_curve(atoms)
+function ctgui_slider:in_1_reasing(atoms)
     local v = type(atoms) == "table" and atoms[1] or atoms
     if type(v) == "number" or type(v) == "string" then
         self.default_easing = v
     end
 end
 
+function ctgui_slider:in_1_curve(atoms)
+    self:in_1_reasing(atoms)
+end
+
 function ctgui_slider:in_1_easing(atoms)
-    self:in_1_curve(atoms)
+    self:in_1_reasing(atoms)
 end
 
 function ctgui_slider:data_tick()
