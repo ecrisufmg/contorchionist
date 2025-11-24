@@ -529,13 +529,30 @@ end
 
 function ctgui_slider:in_2_list(atoms)
     if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
-        self:in_2_float(atoms[1])
+        if #atoms >= 2 and type(atoms[2]) == "number" and atoms[2] > 0 then
+            local f = atoms[1]
+            local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
+            norm = math.max(0, math.min(1, norm))
+            local target = self:visual_to_value(norm)
+            self:start_line(target, atoms[2])
+        else
+            self:in_2_float(atoms[1])
+        end
     elseif type(atoms) == "number" then
         self:in_2_float(atoms)
     end
 end
 
 function ctgui_slider:in_2_float(f)
+    if self.default_line_ms and self.default_line_ms > 0 then
+        local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
+        norm = math.max(0, math.min(1, norm))
+        local target = self:visual_to_value(norm)
+        self:start_line(target, self.default_line_ms)
+        return
+    end
+
+    self:stop_line()
     -- Map input range to 0-1
     local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
     norm = math.max(0, math.min(1, norm))
