@@ -201,6 +201,11 @@ function ctgui_slider:initialize(sel, atoms)
     self.pending_ctrl_value = nil
     self.pending_ctrl_changed = false
 
+    -- Line Clock
+    self.line_clock = pd.Clock:new():register(self, "line_tick")
+    self.line_running = false
+    self.line_grain = 20 -- ms
+
     -- Controller Input/Output
     -- Default to normalized 0-1
     self.v_in_min = 0
@@ -407,6 +412,7 @@ function ctgui_slider:set_value_from_mouse(x, y)
 end
 
 function ctgui_slider:mouse_down(x, y, button, mod)
+    self:stop_line()
     self.dragging = true
     self:set_value_from_mouse(x, y)
     return true
@@ -422,17 +428,78 @@ function ctgui_slider:mouse_up(x, y, button, mod)
     self.dragging = false
 end
 
+-- Line Logic
+
+function ctgui_slider:stop_line()
+    if self.line_running then
+        self.line_clock:unset()
+        self.line_running = false
+    end
+end
+
+function ctgui_slider:start_line(target, time_ms)
+    self:stop_line()
+    
+    target = math.max(self.min_val, math.min(self.max_val, target))
+    
+    if time_ms <= 0 then
+        self:in_1_float(target)
+        return
+    end
+    
+    local ticks = math.ceil(time_ms / self.line_grain)
+    if ticks < 1 then ticks = 1 end
+    
+    self.line_target = target
+    self.line_ticks = ticks
+    self.line_inc = (target - self.current_value) / ticks
+    
+    self.line_running = true
+    self.line_clock:delay(self.line_grain)
+end
+
+function ctgui_slider:line_tick()
+    if not self.line_running then return end
+    
+    self.current_value = self.current_value + self.line_inc
+    self.line_ticks = self.line_ticks - 1
+    
+    -- Check bounds/completion
+    local finished = false
+    if self.line_ticks <= 0 then
+        self.current_value = self.line_target
+        finished = true
+    end
+    
+    self.current_value = math.max(self.min_val, math.min(self.max_val, self.current_value))
+    
+    self:update_visual_from_value()
+    self:output_value()
+    self:throttled_repaint()
+    
+    if finished then
+        self.line_running = false
+    else
+        self.line_clock:delay(self.line_grain)
+    end
+end
+
 -- Input
 
 function ctgui_slider:in_1_list(atoms)
     if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
-        self:in_1_float(atoms[1])
+        if #atoms >= 2 and type(atoms[2]) == "number" and atoms[2] > 0 then
+            self:start_line(atoms[1], atoms[2])
+        else
+            self:in_1_float(atoms[1])
+        end
     elseif type(atoms) == "number" then
         self:in_1_float(atoms)
     end
 end
 
 function ctgui_slider:in_1_float(f)
+    self:stop_line()
     self.current_value = math.max(self.min_val, math.min(self.max_val, f))
     self:update_visual_from_value()
     self:throttled_repaint()
@@ -444,6 +511,7 @@ function ctgui_slider:in_1_float(f)
 end
 
 function ctgui_slider:in_1_set(f)
+    self:stop_line()
     self.current_value = math.max(self.min_val, math.min(self.max_val, f))
     self:update_visual_from_value()
     self:throttled_repaint()
