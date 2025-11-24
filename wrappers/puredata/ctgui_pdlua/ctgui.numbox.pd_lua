@@ -22,12 +22,14 @@ local Colors = require("colors")
 local ctgui_numbox = pd.Class:new():register("ctgui.numbox")
 
 -- Default Colors (HSB)
-local C_BG_LIGHT = {0, 0, 1}
-local C_BG_DARK = {0, 0, 0.2}
-local C_TEXT_LIGHT = {0, 0, 0}
-local C_TEXT_DARK = {0, 0, 1}
-local C_BORDER_LIGHT = {0, 0, 0.6}
+local C_BG_LIGHT = {0, 0, 0.9}   -- Light Grey
+local C_BG_DARK = {0, 0, 0.35}
+local C_TEXT_LIGHT = {0, 0, 0.2}
+local C_TEXT_DARK = {0, 0, 0.9}
+local C_BORDER_LIGHT = {0, 0, 0.6} -- Darker Grey
 local C_BORDER_DARK = {0, 0, 0.6}
+local C_MARKER_LIGHT = {0, 0, 0.4} -- Darker for inlet/outlet markers
+local C_MARKER_DARK = {0, 0, 0.6}
 local C_ACTIVE_BORDER = {0.6, 0.8, 0.9} -- Highlight when active
 
 function ctgui_numbox:initialize(sel, atoms)
@@ -101,6 +103,7 @@ function ctgui_numbox:initialize(sel, atoms)
     self.c_bg = get_color_flexible({"bgcolor", "bg"}, is_dark and C_BG_DARK or C_BG_LIGHT)
     self.c_text = get_color_flexible({"color", "textcolor", "fg"}, is_dark and C_TEXT_DARK or C_TEXT_LIGHT)
     self.c_border = get_color_flexible({"bordercolor", "border"}, is_dark and C_BORDER_DARK or C_BORDER_LIGHT)
+    self.c_marker = get_color_flexible({"markercolor", "marker"}, is_dark and C_MARKER_DARK or C_MARKER_LIGHT)
 
     -- Highlight color for active editing
     local r, g, b = Colors.hsb(C_ACTIVE_BORDER[1], C_ACTIVE_BORDER[2], C_ACTIVE_BORDER[3])
@@ -140,10 +143,8 @@ function ctgui_numbox:initialize(sel, atoms)
     self.pending_out_changed = false
 
     -- Controller Input/Output
-    -- Normalizing isn't as straightforward for unbound numbox,
-    -- but we keep the standard slots.
     self.inlets = 2
-    self.outlets = 1 -- Only one outlet for numbox usually (value)
+    self.outlets = 1
 
     -- Override repaint for throttling
     self._raw_repaint = self.repaint
@@ -170,7 +171,7 @@ function ctgui_numbox:in_1_getcode()
     pd.post(str)
 end
 
--- Interaction
+-- Interaction (Same as before)
 
 function ctgui_numbox:mouse_down(x, y, button, mod)
     if button == 1 then -- Left click
@@ -178,11 +179,9 @@ function ctgui_numbox:mouse_down(x, y, button, mod)
         self.drag_start_y = y
         self.drag_start_val = self.current_value
         self.drag_accumulated_delta = 0
-        -- If we were typing, confirm and exit typing
         if self.typing then
             self:confirm_typing()
         end
-        -- Start tracking for potential drag
         self.potential_drag = true
         return true
     end
@@ -199,29 +198,11 @@ function ctgui_numbox:mouse_drag(x, y, button, mod)
 
     if self.dragging then
         local dy = self.drag_start_y - y
-
-        -- Scale factor
         local scale = 1.0
-        local shift = (mod == 1) -- Shift key (check specific mod flag in pure data lua docs if 1 is shift)
-        -- Actually, mod is a bitmask usually.
-        -- In standard Pd, shift=1, ctrl=2, alt=4?
-        -- Let's assume mod 1 includes shift.
-
-        if shift then
-            scale = 0.01
-        else
-            scale = 1.0
-        end
-
-        -- Sensitivity: 1 unit per 5 pixels?
+        local shift = (mod == 1)
+        if shift then scale = 0.01 else scale = 1.0 end
         local delta_val = (dy * scale)
-
         local new_val = self.drag_start_val + delta_val
-
-        -- Snap to grid if not shift? No, behavior should be continuous usually.
-        -- But if it's integer mode?
-        -- Let's keep it float but maybe round for display.
-
         self.current_value = math.max(self.min_val, math.min(self.max_val, new_val))
         self:output_value()
         self:throttled_repaint()
@@ -230,24 +211,17 @@ end
 
 function ctgui_numbox:mouse_up(x, y, button, mod)
     if self.potential_drag and not self.dragging then
-        -- It was a click
         self:start_typing()
     end
     self.dragging = false
     self.potential_drag = false
 end
 
--- Typing Logic
-
 function ctgui_numbox:start_typing()
     self.typing = true
-    self.input_buffer = string.format("%g", self.current_value) -- Start with current value
+    self.input_buffer = string.format("%g", self.current_value)
     self:throttled_repaint()
-    -- Note: Since we cannot grab keyboard focus globally easily,
-    -- we rely on the user to route keys if they want,
-    -- OR we assume the environment might support it.
-    -- However, we provide a visual cue.
-    pd.post("ctgui.numbox: Input mode active. Use 'key' messages to inlet 1 if direct typing isn't supported.")
+    pd.post("ctgui.numbox: Input mode active.")
 end
 
 function ctgui_numbox:confirm_typing()
@@ -265,15 +239,8 @@ function ctgui_numbox:cancel_typing()
     self:throttled_repaint()
 end
 
--- Key Input Handling (via message 'key' or 'char' into inlet 1)
--- e.g. [key] -> [pd-lua object]
--- Standard Pd [key] outputs floats (keycode). [keyname] outputs symbol keynames.
-
 function ctgui_numbox:in_1_key(keycode)
     if not self.typing then return end
-
-    -- Handle keys based on ASCII/Keycode
-    -- 13 = Enter, 27 = Esc, 8 = Backspace, 127 = Delete
     if keycode == 13 then -- Enter
         self:confirm_typing()
     elseif keycode == 27 then -- Esc
@@ -285,7 +252,6 @@ function ctgui_numbox:in_1_key(keycode)
         end
     elseif keycode >= 32 and keycode <= 126 then -- Printable ASCII
         local char = string.char(keycode)
-        -- Allow digits, ., -, and maybe e (scientific)
         if char:match("[%d%.%-eE]") then
             self.input_buffer = self.input_buffer .. char
             self:throttled_repaint()
@@ -293,18 +259,12 @@ function ctgui_numbox:in_1_key(keycode)
     end
 end
 
--- Input
-
 function ctgui_numbox:in_1_float(f)
     self.current_value = math.max(self.min_val, math.min(self.max_val, f))
     if self.typing then
         self.input_buffer = string.format("%g", self.current_value)
     end
-    self:output_value() -- Usually numbox outputs when set by float?
-    -- Standard Pd number box:
-    -- Inlet 1 (hot): sets and outputs.
-    -- Inlet 2 (cold): sets only.
-    -- Here we have inlet 1.
+    self:output_value()
     self:throttled_repaint()
 end
 
@@ -316,11 +276,6 @@ function ctgui_numbox:in_1_set(f)
     self:throttled_repaint()
 end
 
--- Handling Cold Inlet (Standard Pd style)
--- Since pd-lua dispatch uses in_N_type, we need to check N.
--- We defined self.inlets = 2.
--- Inlet 2 should be cold (set without output).
-
 function ctgui_numbox:in_2_float(f)
     self.current_value = math.max(self.min_val, math.min(self.max_val, f))
     if self.typing then
@@ -328,9 +283,6 @@ function ctgui_numbox:in_2_float(f)
     end
     self:throttled_repaint()
 end
-
-
--- Output Throttling
 
 function ctgui_numbox:output_value()
     if self.data_fps > 0 then
@@ -347,12 +299,10 @@ function ctgui_numbox:throttled_data_output()
         self.data_pending = true
         return
     end
-
     if self.pending_out_changed then
         self:outlet(1, "float", {self.pending_out_value})
         self.pending_out_changed = false
     end
-
     self.data_clock_running = true
     self.data_clock:delay(1000 / self.data_fps)
 end
@@ -364,8 +314,6 @@ function ctgui_numbox:data_tick()
         self:throttled_data_output()
     end
 end
-
--- Dynamic Configuration (FPS, etc)
 
 function ctgui_numbox:in_1_guifps(atoms)
     local f = type(atoms) == "table" and atoms[1] or atoms
@@ -380,8 +328,6 @@ function ctgui_numbox:in_1_datafps(atoms)
         self.data_fps = (f > 0) and f or 0
     end
 end
-
--- Painting
 
 function ctgui_numbox:throttled_repaint()
     if self.repaint_clock_running then
@@ -401,56 +347,83 @@ function ctgui_numbox:repaint_tick()
     end
 end
 
+-- Painting
+
 function ctgui_numbox:paint(g)
     -- Safety check for colors
     if not self.c_bg then self.c_bg = {237, 237, 237} end
     if not self.c_text then self.c_text = {0, 0, 0} end
     if not self.c_border then self.c_border = {100, 100, 100} end
+    if not self.c_marker then self.c_marker = {100, 100, 100} end
     if not self.c_active then self.c_active = {255, 0, 0} end
 
-    -- Draw Background
-    g:set_color(self.c_bg[1], self.c_bg[2], self.c_bg[3])
-    g:fill_rect(0, 0, self.width, self.height)
-
-    -- Draw Border
+    -- Draw Rounded Box (Border)
     local border_color = self.typing and self.c_active or self.c_border
     g:set_color(border_color[1], border_color[2], border_color[3])
-    g:stroke_rect(0, 0, self.width, self.height, 1)
+    g:fill_rounded_rect(0, 0, self.width, self.height, 4)
 
-    -- Triangle / notch to indicate it's a numbox (optional, mimicking Pd)
-    -- g:fill_polygon... (skipping for cleaner look unless requested)
+    -- Draw Background (Inside, slightly smaller to show border)
+    g:set_color(self.c_bg[1], self.c_bg[2], self.c_bg[3])
+    g:fill_rounded_rect(1, 1, self.width - 2, self.height - 2, 3)
+
+    -- Draw Inlet/Outlet Markers (Semi-circles)
+    g:set_color(self.c_marker[1], self.c_marker[2], self.c_marker[3])
+
+    -- Top Marker (Inlet) - approx 20% from left based on image?
+    -- Or maybe just standard Pd position?
+    -- Image has it slightly left of center.
+    local marker_x = 10 -- Offset
+    local marker_r = 4
+    g:fill_arc(marker_x, 0, marker_r * 2, marker_r * 2, 0, 180) -- Wait, arc arguments?
+    -- pd-lua Graphics: fill_arc(x, y, w, h, start_angle, extent_angle)
+    -- We want top half circle. Y=0.
+    -- Actually, if we draw at y=0, half is clipped?
+    -- No, the image shows them "biting" into the box.
+    -- Let's draw them ON TOP of the background.
+    -- Top one: A semi-circle pointing DOWN? No, image shows dark semi-circle at the edge.
+    -- It looks like a notch.
+    -- Let's draw a semi-circle at the top edge.
+    g:fill_arc(marker_x, -marker_r, marker_r * 2, marker_r * 2, 180, 180) -- Bottom half of circle?
+    -- If y = -r, center is at 0.
+
+    -- Bottom Marker (Outlet)
+    g:fill_arc(marker_x, self.height - marker_r, marker_r * 2, marker_r * 2, 0, 180) -- Top half of circle?
+
+    -- Corner Notch (Top Right)
+    local notch_size = 6
+    g:set_color(self.c_marker[1], self.c_marker[2], self.c_marker[3]) -- Same color as markers? Or border?
+    -- The image shows a greyish triangle. Let's use border color for now or marker color.
+    -- It seems to be an unfilled area or a filled triangle?
+    -- Image: darker grey triangle in top right.
+    g:fill_polygon(
+        self.width - notch_size, 0,
+        self.width, 0,
+        self.width, notch_size
+    )
 
     -- Draw Text
     g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])
-    g:set_font_size(self.fontsize)
 
     local text_to_draw
     if self.typing then
         text_to_draw = self.input_buffer .. "_"
     else
-        -- Format number (max 4 decimals?)
-        -- text_to_draw = string.format("%.4g", self.current_value)
-        -- Use more robust formatting
         local v = self.current_value
         if math.abs(v) < 0.0001 and v ~= 0 then
             text_to_draw = string.format("%.2e", v)
         else
             text_to_draw = string.format("%.3f", v)
-            -- Trim trailing zeros
             if text_to_draw:find("%.") then
                 text_to_draw = text_to_draw:gsub("0+$", ""):gsub("%.$", "")
             end
         end
     end
 
-    -- Center text (simple approximation, pd-lua doesn't give text metrics easily?)
-    -- Actually g:draw_text centers? No.
-    -- We can guess width roughly.
+    -- Left aligned, vertically centered
+    local text_x = 4
+    -- Use the 5th argument for font size!
+    local font_size = self.fontsize
+    local text_y = (self.height - font_size) / 2
 
-    local char_w = self.fontsize * 0.6
-    local text_w = #text_to_draw * char_w
-    local x = (self.width - text_w) / 2
-    local y = (self.height - self.fontsize) / 2 + 2 -- slight offset
-
-    g:draw_text(text_to_draw, x, y)
+    g:draw_text(text_to_draw, text_x, text_y, self.width - text_x, font_size)
 end
