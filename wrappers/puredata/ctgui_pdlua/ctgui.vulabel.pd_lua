@@ -169,38 +169,60 @@ function ctguivulabel:paint(g)
 
     -- Fundo
     g:set_color(self.c_background[1], self.c_background[2], self.c_background[3])
-    g:fill_rect(0, 0, self.width-2, self.height-2)
+    g:fill_rect(0, 0, self.width, self.height)
     
     -- Cor do texto
     g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])
     
     if self.orientation == "vertical" then
-        -- Vertical: labels empilhados (como lvu vertical)
+        -- Vertical: labels lado a lado (como lvu vertical)
         local channel_gap = (self.num_channels > 1) and 1 or 0
         local total_gap = channel_gap * (self.num_channels - 1)
-        local channel_width = (self.width - 4 - total_gap) / self.num_channels
+        local channel_width = (self.width - 3 - total_gap) / self.num_channels
         
         for i = 1, self.num_channels do
             local label = self.labels[i] or tostring(i)
             local x_offset = 2 + ((i - 1) * (channel_width + channel_gap))
             
-            -- Centraliza verticalmente
-            local text_y = (self.height - self.font_size) / 2
+            -- Ajusta tamanho da fonte se necessário
+            local fs = self.font_size
+            -- Se o canal for muito estreito, reduz a fonte
+            if fs > channel_width - 2 then fs = math.max(6, channel_width - 2) end
             
-            g:draw_text(label, x_offset, text_y, channel_width, self.font_size, 1)  -- centered
+            -- Centraliza verticalmente
+            local text_y = (self.height - fs) / 2
+            
+            -- Centraliza horizontalmente (estimativa)
+            local char_w = fs * 0.55
+            local est_w = #label * char_w
+            local text_x = x_offset + (channel_width - est_w) / 2
+            
+            g:draw_text(label, text_x, text_y, channel_width, fs)
         end
     else
-        -- Horizontal: labels lado a lado (como lvu horizontal)
+        -- Horizontal: labels empilhados (como lvu horizontal)
         local channel_gap = (self.num_channels > 1) and 1 or 0
         local total_gap = channel_gap * (self.num_channels - 1)
-        local channel_height = (self.height - 4 - total_gap) / self.num_channels
+        local channel_height = (self.height - 2 - total_gap) / self.num_channels
         
         for i = 1, self.num_channels do
             local label = self.labels[i] or tostring(i)
             local y_offset = 2 + ((i - 1) * (channel_height + channel_gap))
             
-            -- Centraliza verticalmente dentro do canal
-            g:draw_text(label, 2, y_offset, self.width - 4, channel_height, 1)  -- centered
+            -- Ajusta tamanho da fonte se necessário
+            local fs = self.font_size
+            -- Se o canal for muito baixo, reduz a fonte
+            if fs > channel_height - 1 then fs = math.max(6, channel_height - 1) end
+            
+            -- Centraliza verticalmente
+            local text_y = y_offset + (channel_height - fs) / 2
+            
+            -- Centraliza horizontalmente (estimativa)
+            local char_w = fs * 0.55
+            local est_w = #label * char_w
+            local text_x = (self.width - est_w) / 2
+            
+            g:draw_text(label, text_x, text_y, self.width, fs)
         end
     end
 end
