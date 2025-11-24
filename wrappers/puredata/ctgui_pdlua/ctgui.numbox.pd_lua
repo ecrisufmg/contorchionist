@@ -106,6 +106,19 @@ function ctgui_numbox:initialize(sel, atoms)
     local r, g, b = Colors.hsb(C_ACTIVE_BORDER[1], C_ACTIVE_BORDER[2], C_ACTIVE_BORDER[3])
     self.c_active = {r, g, b}
 
+    -- Subtle Highlight for Drag
+    local h, s, v = self.c_bg.h, self.c_bg.s, self.c_bg.b
+    if is_dark then
+        v = math.min(1, v + 0.25)
+    else
+        v = math.max(0, v - 0.2)
+    end
+    local hr, hg, hb = Colors.hsb(h, s, v)
+    self.c_highlight = {hr, hg, hb}
+
+    -- Font sizes
+    self.fontsize_decimal = self.fontsize - 1
+
     -- FPS
     local gui_fps = parser:get_float("guifps guishutter fps shutter", 20)
     self.gui_fps = (gui_fps > 0) and gui_fps or 20
@@ -418,11 +431,12 @@ end
 
 -- Interaction (Same as before)
 
-function ctgui_numbox:get_char_width(char)
+function ctgui_numbox:get_char_width(char, is_decimal)
+    local fs = is_decimal and self.fontsize_decimal or self.fontsize
     if char == "." then
-        return self.fontsize * 0.28 -- Narrower dot
+        return fs * 0.28 -- Narrower dot
     end
-    return self.fontsize * 0.6 -- Standard digit width
+    return fs * 0.6 -- Standard digit width
 end
 
 function ctgui_numbox:get_cursor_info(x)
@@ -433,21 +447,33 @@ function ctgui_numbox:get_cursor_info(x)
     
     local dot_pos = base_s:find("%.")
     local start_x = 4
+    local text_y = (self.height - self.fontsize) / 2
     local rel_x = x - start_x
     
     local current_x = 0
     local found_idx = nil
     local rect_x = 0
     local rect_w = 0
+    local rect_y = text_y
+    local rect_h = self.fontsize
+    local is_decimal = false
     
     -- Check inside base string
     for i = 1, #base_s do
         local char = base_s:sub(i, i)
-        local w = self:get_char_width(char)
+        if char == "." then is_decimal = true end
+        
+        local w = self:get_char_width(char, is_decimal)
         if rel_x < current_x + w then
             found_idx = i
             rect_x = start_x + current_x
             rect_w = w
+            
+            local fs = is_decimal and self.fontsize_decimal or self.fontsize
+            rect_h = fs
+            rect_y = text_y
+            if is_decimal then rect_y = text_y + (self.fontsize - fs) end
+            
             break
         end
         current_x = current_x + w
@@ -456,14 +482,22 @@ function ctgui_numbox:get_cursor_info(x)
     -- If not found, it's beyond the string (ghost digits)
     if not found_idx then
         local i = #base_s
+        -- is_decimal should be true here if we passed the dot (which we ensure exists)
+        is_decimal = true 
+        
         while not found_idx do
             i = i + 1
             local char = "0" -- Ghost digits are 0
-            local w = self:get_char_width(char)
+            local w = self:get_char_width(char, is_decimal)
             if rel_x < current_x + w then
                 found_idx = i
                 rect_x = start_x + current_x
                 rect_w = w
+                
+                local fs = self.fontsize_decimal
+                rect_h = fs
+                rect_y = text_y + (self.fontsize - fs)
+                
                 break
             end
             current_x = current_x + w
@@ -472,6 +506,8 @@ function ctgui_numbox:get_cursor_info(x)
                  found_idx = i
                  rect_x = start_x + current_x
                  rect_w = w
+                 rect_h = self.fontsize_decimal
+                 rect_y = text_y + (self.fontsize - self.fontsize_decimal)
             end
         end
     end
@@ -500,6 +536,8 @@ function ctgui_numbox:get_cursor_info(x)
         power = power,
         rect_x = rect_x,
         rect_w = rect_w,
+        rect_y = rect_y,
+        rect_h = rect_h,
         display_s = display_s
     }
 end
@@ -848,18 +886,39 @@ function ctgui_numbox:paint(g)
     local text_y = (self.height - font_size) / 2
 
     local text_to_draw
+    local highlight_rect = nil
+
     if self.typing then
-        text_to_draw = self.input_buffer .. "_"
+        text_to_draw = self.input_buffer
+        
+        -- Calculate highlight for last char
+        local current_x = text_x
+        local is_dec = false
+        
+        if #text_to_draw == 0 then
+             -- Empty buffer, show cursor at start
+             local w = self:get_char_width("0", false)
+             highlight_rect = {x = text_x, y = text_y, w = w, h = self.fontsize}
+        else
+            for i = 1, #text_to_draw do
+                local char = text_to_draw:sub(i, i)
+                if char == "." then is_dec = true end
+                local w = self:get_char_width(char, is_dec)
+                
+                if i == #text_to_draw then
+                    local fs = is_dec and self.fontsize_decimal or self.fontsize
+                    local ty = text_y
+                    if is_dec then ty = text_y + (self.fontsize - fs) end
+                    highlight_rect = {x = current_x, y = ty, w = w, h = fs}
+                end
+                current_x = current_x + w
+            end
+        end
+
     elseif self.dragging and self.shift_down then
         local info = self:get_cursor_info(self.last_drag_x)
         text_to_draw = info.display_s
-        
-        -- Draw highlight box for active digit
-        g:set_color(self.c_active[1], self.c_active[2], self.c_active[3]) -- Active color
-        g:fill_rect(info.rect_x, text_y, info.rect_w, font_size)
-        
-        -- Reset text color
-        g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])
+        highlight_rect = {x = info.rect_x, y = info.rect_y, w = info.rect_w, h = info.rect_h}
     else
         local v = self.current_value
         if math.abs(v) < 0.0001 and v ~= 0 then
@@ -872,12 +931,32 @@ function ctgui_numbox:paint(g)
         end
     end
 
+    -- Draw highlight
+    if highlight_rect then
+        g:set_color(self.c_highlight[1], self.c_highlight[2], self.c_highlight[3])
+        g:fill_rect(highlight_rect.x, highlight_rect.y, highlight_rect.w, highlight_rect.h)
+        -- Reset text color
+        g:set_color(self.c_text[1], self.c_text[2], self.c_text[3])
+    end
+
     -- Draw char by char (Artificial Monospace with variable width dot)
     local current_x = text_x
+    local is_decimal = false
+    
     for i = 1, #text_to_draw do
         local char = text_to_draw:sub(i, i)
-        local w = self:get_char_width(char)
-        g:draw_text(char, current_x, text_y, 100, font_size) 
+        if char == "." then is_decimal = true end
+        
+        local fs = is_decimal and self.fontsize_decimal or self.fontsize
+        local w = self:get_char_width(char, is_decimal)
+        
+        -- Align baselines (approximate)
+        local ty = text_y
+        if is_decimal then
+             ty = text_y + (self.fontsize - fs) 
+        end
+        
+        g:draw_text(char, current_x, ty, 100, fs) 
         current_x = current_x + w
     end
 end
