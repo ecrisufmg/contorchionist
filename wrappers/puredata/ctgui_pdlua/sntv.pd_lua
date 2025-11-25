@@ -232,10 +232,11 @@ function sntv:in_1_list(atoms)
         -- New partial
         local existing = self:find_voice_for_partial(p_num)
         if existing then
-            -- Should not happen for flag 1, but handle as update if it does
+            -- Partial ID reused or re-triggered without release
             local midi_out = self:ftom(freq) + existing.octave_offset
             existing.last_midi_note = midi_out -- Update current note
-            self:output_voice(existing, midi_out, freq, db, 0)
+            -- Force flag 1 to indicate re-attack
+            self:output_voice(existing, midi_out, freq, db, 1)
         else
             local voice, note, offset = self:allocate_voice(p_num, freq, db)
             if voice then
