@@ -169,8 +169,9 @@ static void torch_amb_spectrails_tilde_tick(t_torch_amb_spectrails_tilde *x) {
         const auto& peaks = x->peak_data_buffer_;
         
         for (const auto& peak : peaks) {
-            t_atom argv[4];
-            SETFLOAT(argv+0, static_cast<t_float>(peak.rank));
+            t_atom argv[5];
+            // Use bin_index as the stable ID instead of rank
+            SETFLOAT(argv+0, static_cast<t_float>(peak.bin_index));
             
             // Freq / MIDI
             float freq_val = peak.freq_hz;
@@ -207,7 +208,10 @@ static void torch_amb_spectrails_tilde_tick(t_torch_amb_spectrails_tilde *x) {
             
             SETFLOAT(argv+3, static_cast<t_float>(peak.state));
             
-            outlet_list(x->info_outlet_, &s_list, 4, argv);
+            // Output rank as the 5th element (optional, but useful)
+            SETFLOAT(argv+4, static_cast<t_float>(peak.rank));
+            
+            outlet_list(x->info_outlet_, &s_list, 5, argv);
         }
         
         x->peak_data_ready_ = false;
@@ -564,6 +568,15 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
     float limiter_thresh_db = parser.get_float("limiter lim l", 0.0f);
     float limiter_thresh_lin = std::pow(10.0f, limiter_thresh_db / 20.0f);
     
+    // Control limiter parsing
+    bool ctllimiter_enable = false;
+    float ctllimiter_thresh_db = 0.0f;
+    if (parser.has_flag("ctllimiter ctllim")) {
+        ctllimiter_enable = true;
+        ctllimiter_thresh_db = parser.get_float("ctllimiter ctllim", 0.0f);
+    }
+    float ctllimiter_thresh_lin = std::pow(10.0f, ctllimiter_thresh_db / 20.0f);
+    
     // Initialize device and apply device parsing
     x->device_ = device;
     torch::Device final_device = device;
@@ -581,6 +594,7 @@ static void *torch_amb_spectrails_tilde_new(t_symbol *, int argc, t_atom *argv) 
             if (proc) {
                 proc->set_output_gain(gain_lin);
                 proc->set_limiter(limiter_enable, limiter_thresh_lin);
+                proc->set_ctl_limiter(ctllimiter_enable, ctllimiter_thresh_lin);
             }
         }
         
@@ -820,6 +834,29 @@ static void torch_amb_spectrails_tilde_limiter(t_torch_amb_spectrails_tilde *x, 
     }
 }
 
+static void torch_amb_spectrails_tilde_ctllimiter(t_torch_amb_spectrails_tilde *x, t_symbol *s, int argc, t_atom *argv) {
+    bool enable = true;
+    float threshold_db = 0.0f;
+    
+    if (argc > 0) {
+        if (argv[0].a_type == A_SYMBOL) {
+            t_symbol* sym = atom_getsymbol(argv);
+            if (sym == gensym("off") || sym == gensym("false") || sym == gensym("disable")) {
+                enable = false;
+            }
+        } else {
+            threshold_db = atom_getfloat(argv);
+            enable = true;
+        }
+    }
+    
+    float threshold_lin = std::pow(10.0f, threshold_db / 20.0f);
+    
+    for (auto& proc : x->processors_) {
+        if (proc) proc->set_ctl_limiter(enable, threshold_lin);
+    }
+}
+
 static void torch_amb_spectrails_tilde_midi(t_torch_amb_spectrails_tilde *x, t_floatarg f) {
     x->midi_mode_ = (f != 0.0f);
 }
@@ -951,6 +988,9 @@ extern "C" void setup_torch0x2eamb0x2espectrails_tilde(void) {
     class_addmethod(torch_amb_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_amb_spectrails_tilde_limiter),
                     gensym("limiter"), A_GIMME, 0);
+    class_addmethod(torch_amb_spectrails_tilde_class,
+                    reinterpret_cast<t_method>(torch_amb_spectrails_tilde_ctllimiter),
+                    gensym("ctllimiter"), A_GIMME, 0);
     class_addmethod(torch_amb_spectrails_tilde_class,
                     reinterpret_cast<t_method>(torch_amb_spectrails_tilde_nolimiter),
                     gensym("nolimiter"), A_NULL, 0);

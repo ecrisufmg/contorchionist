@@ -13,6 +13,7 @@ namespace ap_spectrails {
 
 struct PeakInfo {
     int rank;
+    int bin_index; // Added bin index for stable tracking
     float freq_hz;
     float mag_db;
     int state; // 1: new, 0: sustained, -1: decayed
@@ -70,6 +71,8 @@ private:
     T output_gain_;
     bool use_limiter_;
     T limiter_threshold_;
+    bool use_ctl_limiter_;
+    T ctl_limiter_threshold_;
     
     std::vector<PeakInfo> latest_peaks_;
 
@@ -105,7 +108,9 @@ public:
           floor_threshold_(static_cast<T>(-1.0)),
           output_gain_(static_cast<T>(1.0)),
           use_limiter_(false),
-          limiter_threshold_(static_cast<T>(1.0)) {
+          limiter_threshold_(static_cast<T>(1.0)),
+          use_ctl_limiter_(false),
+          ctl_limiter_threshold_(static_cast<T>(1.0)) {
         if (num_bins_ == 0) {
             throw std::invalid_argument("SpectralTrailsProcessor: num_bins must be > 0");
         }
@@ -150,6 +155,11 @@ public:
     void set_limiter(bool enable, T threshold = static_cast<T>(1.0)) {
         use_limiter_ = enable;
         limiter_threshold_ = threshold;
+    }
+
+    void set_ctl_limiter(bool enable, T threshold = static_cast<T>(1.0)) {
+        use_ctl_limiter_ = enable;
+        ctl_limiter_threshold_ = threshold;
     }
     
     const std::vector<PeakInfo>& get_latest_peaks() const { return latest_peaks_; }
@@ -249,7 +259,7 @@ public:
                     float freq = static_cast<float>(j) * sample_rate_ / fft_size_;
                     float mag_lin = out_mag_check[j];
                     float mag_db = 20.0f * std::log10(std::max(mag_lin, 1e-10f));
-                    latest_peaks_.push_back({0, freq, mag_db, -1, mag_lin});
+                    latest_peaks_.push_back({0, static_cast<int>(j), freq, mag_db, -1, mag_lin});
                     
                     last_peak_check[j] = 0.0f; // Clear the marker
                 } else {
@@ -521,10 +531,35 @@ public:
                 }
                 
                 float freq = static_cast<float>(j) * sample_rate_ / fft_size_;
-                float mag_lin = final_mag_acc[j]; // Use final magnitude
+                
+                float mag_lin;
+                if (is_new) {
+                    // For new peaks, report the target magnitude (detected peak)
+                    // so that Note On events have proper velocity.
+                    mag_lin = target_acc[j];
+                    
+                    // Apply output gain and limiter to this value too, to be consistent
+                    if (output_gain_ != static_cast<T>(1.0)) {
+                        mag_lin *= output_gain_;
+                    }
+                    // Apply control limiter if enabled, otherwise fallback to audio limiter if enabled
+                    if (use_ctl_limiter_) {
+                        mag_lin = std::min(mag_lin, ctl_limiter_threshold_);
+                    } else if (use_limiter_) {
+                        mag_lin = std::min(mag_lin, limiter_threshold_);
+                    }
+                } else {
+                    mag_lin = final_mag_acc[j]; // Use final magnitude (envelope follower)
+                    // final_mag_acc is already limited by audio limiter if enabled.
+                    // Apply control limiter if enabled
+                    if (use_ctl_limiter_) {
+                        mag_lin = std::min(mag_lin, ctl_limiter_threshold_);
+                    }
+                }
+                
                 float mag_db = 20.0f * std::log10(std::max(mag_lin, 1e-10f));
                 
-                latest_peaks_.push_back({0, freq, mag_db, is_new ? 1 : 0, mag_lin});
+                latest_peaks_.push_back({0, static_cast<int>(j), freq, mag_db, is_new ? 1 : 0, mag_lin});
             }
         }
         

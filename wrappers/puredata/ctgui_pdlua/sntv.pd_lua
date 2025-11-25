@@ -221,38 +221,44 @@ function sntv:allocate_voice(partial_id, freq, db)
 end
 
 function sntv:in_1_list(atoms)
+    -- New format: <bin_index> <freq> <mag> <state> <rank>
     if #atoms < 4 then return end
     
-    local p_num = atoms[1]
+    local bin_index = atoms[1]  -- Stable ID (FFT bin)
     local freq = atoms[2]
     local db = atoms[3]
     local flag = atoms[4]
+    -- local rank = atoms[5] -- Optional, not used for tracking
     
     if flag == 1 then
         -- New partial
-        local existing = self:find_voice_for_partial(p_num)
+        local existing = self:find_voice_for_partial(bin_index)
         if existing then
             -- Partial ID reused or re-triggered without release
-            local midi_out = self:ftom(freq) + existing.octave_offset
-            existing.last_midi_note = midi_out -- Update current note
-            -- Force flag 1 to indicate re-attack
-            self:output_voice(existing, midi_out, freq, db, 1)
+            -- Send release for the old note first
+            local midi_out_old = self:ftom(freq) + existing.octave_offset
+            self:output_voice(existing, midi_out_old, freq, db, -1)
+            
+            -- Now reallocate as a new note
+            existing.active = false
+            existing.partial_id = -1
+        end
+        
+        -- Allocate voice
+        local voice, note, offset = self:allocate_voice(bin_index, freq, db)
+        if voice then
+            voice.active = true
+            voice.partial_id = bin_index
+            voice.octave_offset = offset
+            voice.last_midi_note = note
+            self:output_voice(voice, note, freq, db, 1)
         else
-            local voice, note, offset = self:allocate_voice(p_num, freq, db)
-            if voice then
-                voice.active = true
-                voice.partial_id = p_num
-                voice.octave_offset = offset
-                voice.last_midi_note = note
-                self:output_voice(voice, note, freq, db, 1)
-            else
-                -- Allocation failed (full or out of range)
-            end
+            -- Allocation failed (full or out of range)
         end
         
     elseif flag == 0 then
         -- Continuation
-        local voice = self:find_voice_for_partial(p_num)
+        local voice = self:find_voice_for_partial(bin_index)
         if voice then
             -- 4.1 ...strictly preserving the pitch offset
             local midi_out = self:ftom(freq) + voice.octave_offset
@@ -262,11 +268,9 @@ function sntv:in_1_list(atoms)
         
     elseif flag == -1 then
         -- End
-        local voice = self:find_voice_for_partial(p_num)
+        local voice = self:find_voice_for_partial(bin_index)
         if voice then
             -- Output release
-            -- Use last known note or calculate from freq?
-            -- Calculate from freq to be safe
             local midi_out = self:ftom(freq) + voice.octave_offset
             self:output_voice(voice, midi_out, freq, db, -1)
             

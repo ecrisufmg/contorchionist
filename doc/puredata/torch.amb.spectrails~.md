@@ -34,8 +34,9 @@ It performs peak detection, parabolic interpolation, and manages the lifecycle o
 *   **`-prominence <float>`**, **`-prom`**: Prominence threshold (0.0 - 1.0) for mode 1. Default: 0.6.
 *   **`-max_peaks <int>`**, **`-maxpeaks`**, **`-mp`**: Maximum number of simultaneous peaks allowed. 0 = unlimited. Default: 0.
 *   **`-floordb <float>`**, **`-floor`**: Noise floor in dB for release gate. Peaks below this level are forced to decay. Default: -150.0 (disabled).
-*   **`-limiter <float>`**, **`-lim`**, **`-l`**: Enable limiter with specific threshold in dB. Default: Enabled at 0dB if not specified.
-*   **`-nolimiter`**, **`-nolim`**: Disable the limiter at startup.
+*   **`-limiter <float>`**, **`-lim`**, **`-l`**: Enable audio limiter with specific threshold in dB. Default: Enabled at 0dB if not specified.
+*   **`-ctllimiter <float>`**, **`-ctllim`**: Enable control data limiter with specific threshold in dB. Limits the magnitude reported in the control outlet.
+*   **`-nolimiter`**, **`-nolim`**: Disable the audio limiter at startup.
 *   **`-midi`**, **`-m`**: Output frequency as MIDI note numbers in the control outlet.
 *   **`-velocity`**, **`-vel`**, **`-v`**: Output magnitude as MIDI velocity (0-127). Can be `log` (default), `linear`, or `off`.
 *   **`-device <string>`**, **`-d`**: Torch device to use (`cpu`, `cuda`, `mps`). Default: `cpu`.
@@ -90,10 +91,13 @@ The object creates dynamic signal outlets followed by one control outlet.
 *   **`prominence <float>`**: Set prominence threshold.
 *   **`max_peaks <int>`**, **`maxpeaks`**: Set maximum number of peaks.
 *   **`floordb <float>`**, **`floor`**: Set noise floor in dB.
-*   **`limiter <arg>`**: Configure limiter.
+*   **`limiter <arg>`**: Configure audio limiter.
     *   `limiter off`, `limiter false`: Disable limiter.
     *   `limiter <float>`: Enable limiter with threshold in dB (e.g., `limiter -3`).
-*   **`nolimiter`**, **`nolim`**: Disable limiter.
+*   **`ctllimiter <arg>`**: Configure control data limiter.
+    *   `ctllimiter off`, `ctllimiter false`: Disable control limiter.
+    *   `ctllimiter <float>`: Enable control limiter with threshold in dB (e.g., `ctllimiter -6`).
+*   **`nolimiter`**, **`nolim`**: Disable audio limiter.
 *   **`midi <0/1>`**: Enable/disable MIDI note output format.
 *   **`velocity <arg>`**, **`vel`**: Configure velocity output format.
     *   `velocity log`: Logarithmic mapping (dB to 0-127).
@@ -104,7 +108,12 @@ The object creates dynamic signal outlets followed by one control outlet.
 ## Details
 
 ### Limiter and Feedback
-The object features a built-in limiter that is enabled by default (0dB threshold). This is crucial when using `decay` values > 1.0, which create positive feedback loops. The limiter clamps both the output signal and the internal state to prevent infinite growth (NaN/Inf) and allows the system to remain stable even under heavy feedback.
+The object features a built-in audio limiter that is enabled by default (0dB threshold). This is crucial when using `decay` values > 1.0, which create positive feedback loops. The limiter clamps both the output signal and the internal state to prevent infinite growth (NaN/Inf) and allows the system to remain stable even under heavy feedback.
+
+Additionally, a separate **Control Limiter** (`ctllimiter`) can be used to clamp the magnitude values reported in the control outlet, allowing for independent dynamic range management between the audio signal and the control data.
+
+### Peak Reporting
+When a new peak is detected (state `1`), the object reports the **target magnitude** (the detected peak level) rather than the instantaneous envelope value. This ensures that Note On events receive the full velocity/amplitude of the detected peak immediately. For sustained peaks (state `0`), the reported magnitude follows the envelope follower, reflecting the synthesized amplitude (attack ramp and decay).
 
 ### Detection Modes
 *   **Slope-based (0)**: Detects peaks based on the change in slope of the spectral magnitude. Good for general usage.
