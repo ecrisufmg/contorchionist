@@ -9,6 +9,7 @@ build/
 # Python virtual environments
 .conda/
 .venv/
+.notas/
 
 # graphviz 
 /doc/graph/*
