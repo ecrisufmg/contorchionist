@@ -3,7 +3,7 @@
 -- Usage:
 --   [ctgui.rslider @min 0 @max 1 @mode lin]
 --   [ctgui.rslider @min -120 @max 12 @mode db]
---   [ctgui.rslider @list] (Single inlet/outlet mode)
+--   [ctgui.rslider @route] (Single inlet/outlet mode)
 --
 -- Arguments:
 --   @min <val>      : Minimum value (default: 0 for lin/log, -120 for db)
@@ -14,12 +14,14 @@
 --   @color <r g b>  : Handle color
 --   @bgcolor <r g b>: Background color
 --   @slotcolor <r g b>: Slot/Track color
---   @list           : Enable single inlet/outlet list mode
+--   @route          : Enable single inlet/outlet route mode
 --   @guifps <val>   : GUI refresh rate
 --   @datafps <val>  : Data output rate limit
 
 local ArgParser = require("pd_arg_parser")
 local Colors = require("colors")
+
+local unpack = unpack or table.unpack
 
 local ctgui_rslider = pd.Class:new():register("ctgui.rslider")
 
@@ -66,9 +68,10 @@ function ctgui_rslider:initialize(sel, atoms)
     self.min_val = parser:get_float("min minimum", default_min)
     self.max_val = parser:get_float("max maximum", default_max)
 
-    -- List Mode
-    self.list_mode = parser:has_flag("list")
+    -- Route Mode
+    self.route_mode = parser:has_flag("route")
     self.pos_output = parser:has_flag("posoutput")
+    self.pos_mode = parser:has_flag("pos")
 
     -- Initial Values
     local default_init = (self.mode == "db") and self.min_val or 0.0
@@ -208,9 +211,12 @@ function ctgui_rslider:initialize(sel, atoms)
     if #valout >= 2 then self.v_out_min = valout[1]; self.v_out_max = valout[2] end
 
     -- Inlets/Outlets
-    if self.list_mode then
+    if self.route_mode then
         self.inlets = 1
         self.outlets = 1
+    elseif self.pos_mode then
+        self.inlets = 4
+        self.outlets = 4
     else
         self.inlets = 2
         self.outlets = self.pos_output and 3 or 2
@@ -404,12 +410,18 @@ function ctgui_rslider:mouse_down(x, y, button, mod)
         self.drag_start_vis_low = self.vis_low
         self.drag_start_vis_high = self.vis_high
     else
-        local dist_low = math.abs(vis - self.vis_low)
-        local dist_high = math.abs(vis - self.vis_high)
-        if dist_low < dist_high then
+        if vis < self.vis_low then
             self.drag_target = "low"
-        else
+        elseif vis > self.vis_high then
             self.drag_target = "high"
+        else
+            local dist_low = math.abs(vis - self.vis_low)
+            local dist_high = math.abs(vis - self.vis_high)
+            if dist_low < dist_high then
+                self.drag_target = "low"
+            else
+                self.drag_target = "high"
+            end
         end
         self:set_value_from_mouse(x, y)
     end
@@ -569,9 +581,8 @@ function ctgui_rslider:parse_line_args(atoms)
     return target, time, easing, params
 end
 
--- List Mode Handlers
+-- Route Mode Handlers (Global)
 function ctgui_rslider:in_1_lo(atoms)
-    if not self.list_mode then return end
     if type(atoms) == "table" then
         local target, time, easing, params = self:parse_line_args(atoms)
         self:start_line_low(target, time, easing, params)
@@ -582,7 +593,6 @@ end
 function ctgui_rslider:in_1_low(atoms) self:in_1_lo(atoms) end
 
 function ctgui_rslider:in_1_hi(atoms)
-    if not self.list_mode then return end
     if type(atoms) == "table" then
         local target, time, easing, params = self:parse_line_args(atoms)
         self:start_line_high(target, time, easing, params)
@@ -593,7 +603,6 @@ end
 function ctgui_rslider:in_1_high(atoms) self:in_1_hi(atoms) end
 
 function ctgui_rslider:in_1_lopos(atoms)
-    if not self.list_mode then return end
     if type(atoms) == "table" then
         local target_pos, time, easing, params = self:parse_line_args(atoms)
         local target_val = self:visual_to_value(target_pos)
@@ -606,7 +615,6 @@ end
 function ctgui_rslider:in_1_lowpos(atoms) self:in_1_lopos(atoms) end
 
 function ctgui_rslider:in_1_hipos(atoms)
-    if not self.list_mode then return end
     if type(atoms) == "table" then
         local target_pos, time, easing, params = self:parse_line_args(atoms)
         local target_val = self:visual_to_value(target_pos)
@@ -619,46 +627,51 @@ end
 function ctgui_rslider:in_1_highpos(atoms) self:in_1_hipos(atoms) end
 
 function ctgui_rslider:in_1_list(atoms)
-    if self.list_mode then
-        -- List Mode: Parse messages (e.g. "list lo ...")
-        local sel = atoms[1]
-        if sel == "lo" or sel == "low" then
-            if type(atoms[2]) == "number" then
-                local args = {unpack(atoms, 2)}
-                local target, time, easing, params = self:parse_line_args(args)
-                self:start_line_low(target, time, easing, params)
-            end
-        elseif sel == "hi" or sel == "high" then
-            if type(atoms[2]) == "number" then
-                local args = {unpack(atoms, 2)}
-                local target, time, easing, params = self:parse_line_args(args)
-                self:start_line_high(target, time, easing, params)
-            end
-        elseif sel == "lopos" or sel == "lowpos" then
-            if type(atoms[2]) == "number" then
-                local args = {unpack(atoms, 2)}
-                local target_pos, time, easing, params = self:parse_line_args(args)
-                local target_val = self:visual_to_value(target_pos)
-                self:start_line_low(target_val, time, easing, params)
-            end
-        elseif sel == "hipos" or sel == "highpos" then
-            if type(atoms[2]) == "number" then
-                local args = {unpack(atoms, 2)}
-                local target_pos, time, easing, params = self:parse_line_args(args)
-                local target_val = self:visual_to_value(target_pos)
-                self:start_line_high(target_val, time, easing, params)
-            end
+    local sel = atoms[1]
+    
+    -- Global Handlers
+    if sel == "lo" or sel == "low" then
+        if type(atoms[2]) == "number" then
+            local args = {unpack(atoms, 2)}
+            local target, time, easing, params = self:parse_line_args(args)
+            self:start_line_low(target, time, easing, params)
         end
-    else
+        return
+    elseif sel == "hi" or sel == "high" then
+        if type(atoms[2]) == "number" then
+            local args = {unpack(atoms, 2)}
+            local target, time, easing, params = self:parse_line_args(args)
+            self:start_line_high(target, time, easing, params)
+        end
+        return
+    elseif sel == "lopos" or sel == "lowpos" then
+        if type(atoms[2]) == "number" then
+            local args = {unpack(atoms, 2)}
+            local target_pos, time, easing, params = self:parse_line_args(args)
+            local target_val = self:visual_to_value(target_pos)
+            self:start_line_low(target_val, time, easing, params)
+        end
+        return
+    elseif sel == "hipos" or sel == "highpos" then
+        if type(atoms[2]) == "number" then
+            local args = {unpack(atoms, 2)}
+            local target_pos, time, easing, params = self:parse_line_args(args)
+            local target_val = self:visual_to_value(target_pos)
+            self:start_line_high(target_val, time, easing, params)
+        end
+        return
+    end
+
+    if not self.route_mode then
         -- Standard Mode: Inlet 1 is Low Value or Pos
-        if atoms[1] == "pos" then
+        if sel == "pos" then
             if type(atoms[2]) == "number" then
                 local args = {unpack(atoms, 2)}
                 local target_pos, time, easing, params = self:parse_line_args(args)
                 local target_val = self:visual_to_value(target_pos)
                 self:start_line_low(target_val, time, easing, params)
             end
-        elseif type(atoms[1]) == "number" then
+        elseif type(sel) == "number" then
             local target, time, easing, params = self:parse_line_args(atoms)
             self:start_line_low(target, time, easing, params)
         end
@@ -666,7 +679,7 @@ function ctgui_rslider:in_1_list(atoms)
 end
 
 function ctgui_rslider:in_1_pos(atoms)
-    if self.list_mode then return end
+    if self.route_mode then return end
     if type(atoms) == "table" then
         local target_pos, time, easing, params = self:parse_line_args(atoms)
         local target_val = self:visual_to_value(target_pos)
@@ -678,7 +691,7 @@ function ctgui_rslider:in_1_pos(atoms)
 end
 
 function ctgui_rslider:in_1_float(f)
-    if self.list_mode then return end
+    if self.route_mode then return end
     if self.default_line_ms > 0 then
         self:start_line_low(f, self.default_line_ms)
     else
@@ -691,7 +704,7 @@ function ctgui_rslider:in_1_float(f)
 end
 
 function ctgui_rslider:in_1_set(f)
-    if self.list_mode then return end
+    if self.route_mode then return end
     self:stop_line_low()
     self.val_low = math.min(f, self.val_high)
     self:update_visual_from_value()
@@ -700,7 +713,7 @@ end
 
 -- Inlet 2: High Value
 function ctgui_rslider:in_2_list(atoms)
-    if self.list_mode then return end
+    if self.route_mode then return end
     if atoms[1] == "pos" then
         if type(atoms[2]) == "number" then
             local args = {unpack(atoms, 2)}
@@ -715,7 +728,7 @@ function ctgui_rslider:in_2_list(atoms)
 end
 
 function ctgui_rslider:in_2_pos(atoms)
-    if self.list_mode then return end
+    if self.route_mode then return end
     if type(atoms) == "table" then
         local target_pos, time, easing, params = self:parse_line_args(atoms)
         local target_val = self:visual_to_value(target_pos)
@@ -727,7 +740,7 @@ function ctgui_rslider:in_2_pos(atoms)
 end
 
 function ctgui_rslider:in_2_float(f)
-    if self.list_mode then return end
+    if self.route_mode then return end
     if self.default_line_ms > 0 then
         self:start_line_high(f, self.default_line_ms)
     else
@@ -740,18 +753,78 @@ function ctgui_rslider:in_2_float(f)
 end
 
 function ctgui_rslider:in_2_set(f)
-    if self.list_mode then return end
+    if self.route_mode then return end
     self:stop_line_high()
     self.val_high = math.max(f, self.val_low)
     self:update_visual_from_value()
     self:throttled_repaint()
 end
 
--- Removed Inlet 3 and 4 handlers as they are no longer used in default mode
-function ctgui_rslider:in_3_list(atoms) end
-function ctgui_rslider:in_3_float(f) end
-function ctgui_rslider:in_4_list(atoms) end
-function ctgui_rslider:in_4_float(f) end
+-- Inlet 3: Low Position (if @pos)
+function ctgui_rslider:in_3_float(f)
+    if self.route_mode or not self.pos_mode then return end
+    local target_val = self:visual_to_value(f)
+    if self.default_line_ms > 0 then
+        self:start_line_low(target_val, self.default_line_ms)
+    else
+        self:stop_line_low()
+        self.val_low = math.min(target_val, self.val_high)
+        self:update_visual_from_value()
+        self:throttled_repaint()
+        self:output_value()
+    end
+end
+
+function ctgui_rslider:in_3_list(atoms)
+    if self.route_mode or not self.pos_mode then return end
+    if type(atoms[1]) == "number" then
+        local target_pos, time, easing, params = self:parse_line_args(atoms)
+        local target_val = self:visual_to_value(target_pos)
+        self:start_line_low(target_val, time, easing, params)
+    end
+end
+
+function ctgui_rslider:in_3_set(f)
+    if self.route_mode or not self.pos_mode then return end
+    self:stop_line_low()
+    local target_val = self:visual_to_value(f)
+    self.val_low = math.min(target_val, self.val_high)
+    self:update_visual_from_value()
+    self:throttled_repaint()
+end
+
+-- Inlet 4: High Position (if @pos)
+function ctgui_rslider:in_4_float(f)
+    if self.route_mode or not self.pos_mode then return end
+    local target_val = self:visual_to_value(f)
+    if self.default_line_ms > 0 then
+        self:start_line_high(target_val, self.default_line_ms)
+    else
+        self:stop_line_high()
+        self.val_high = math.max(target_val, self.val_low)
+        self:update_visual_from_value()
+        self:throttled_repaint()
+        self:output_value()
+    end
+end
+
+function ctgui_rslider:in_4_list(atoms)
+    if self.route_mode or not self.pos_mode then return end
+    if type(atoms[1]) == "number" then
+        local target_pos, time, easing, params = self:parse_line_args(atoms)
+        local target_val = self:visual_to_value(target_pos)
+        self:start_line_high(target_val, time, easing, params)
+    end
+end
+
+function ctgui_rslider:in_4_set(f)
+    if self.route_mode or not self.pos_mode then return end
+    self:stop_line_high()
+    local target_val = self:visual_to_value(f)
+    self.val_high = math.max(target_val, self.val_low)
+    self:update_visual_from_value()
+    self:throttled_repaint()
+end
 
 -- Output
 
@@ -765,15 +838,18 @@ function ctgui_rslider:output_value()
         
         self:throttled_data_output()
     else
-        if self.list_mode then
-            self:outlet(1, "list", {"lo", self.val_low})
-            self:outlet(1, "list", {"hi", self.val_high})
-            self:outlet(1, "list", {"lopos", self.vis_low})
-            self:outlet(1, "list", {"hipos", self.vis_high})
+        if self.route_mode then
+            self:outlet(1, "lo", {self.val_low})
+            self:outlet(1, "hi", {self.val_high})
+            self:outlet(1, "lopos", {self.vis_low})
+            self:outlet(1, "hipos", {self.vis_high})
         else
             self:outlet(1, "float", {self.val_low})
             self:outlet(2, "float", {self.val_high})
-            if self.pos_output then
+            if self.pos_mode then
+                self:outlet(3, "float", {self.vis_low})
+                self:outlet(4, "float", {self.vis_high})
+            elseif self.pos_output then
                 self:outlet(3, "list", {self.vis_low, self.vis_high})
             end
         end
@@ -787,23 +863,33 @@ function ctgui_rslider:throttled_data_output()
     end
     
     if self.pending_out_changed then
-        if self.list_mode then
-            self:outlet(1, "list", {"lo", self.pending_out_low})
-            self:outlet(1, "list", {"hi", self.pending_out_high})
+        if self.route_mode then
+            self:outlet(1, "lo", {self.pending_out_low})
+            self:outlet(1, "hi", {self.pending_out_high})
             local vis_l = self.pending_vis_low or self:value_to_visual(self.pending_out_low)
             local vis_h = self.pending_vis_high or self:value_to_visual(self.pending_out_high)
-            self:outlet(1, "list", {"lopos", vis_l})
-            self:outlet(1, "list", {"hipos", vis_h})
+            self:outlet(1, "lopos", {vis_l})
+            self:outlet(1, "hipos", {vis_h})
         else
             self:outlet(1, "float", {self.pending_out_low})
             self:outlet(2, "float", {self.pending_out_high})
-            if self.pos_output then
+            if self.pos_mode then
+                local vis_l = self.pending_vis_low or self:value_to_visual(self.pending_out_low)
+                local vis_h = self.pending_vis_high or self:value_to_visual(self.pending_out_high)
+                self:outlet(3, "float", {vis_l})
+                self:outlet(4, "float", {vis_h})
+            elseif self.pos_output then
                 local vis_l = self.pending_vis_low or self:value_to_visual(self.pending_out_low)
                 local vis_h = self.pending_vis_high or self:value_to_visual(self.pending_out_high)
                 self:outlet(3, "list", {vis_l, vis_h})
             end
         end
         self.pending_out_changed = false
+    end
+    
+    if self.pending_ctrl_changed and not self.route_mode then
+        self:outlet(2, "list", {self.pending_ctrl_low, self.pending_ctrl_high})
+        self.pending_ctrl_changed = false
     end
     
     self.data_clock_running = true
