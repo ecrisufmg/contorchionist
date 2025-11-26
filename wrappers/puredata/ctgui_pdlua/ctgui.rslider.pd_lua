@@ -441,21 +441,150 @@ end
 
 function ctgui_rslider:calculate_easing(t, mode, params)
     if mode == "linear" or mode == "line" then return t end
+    
     params = params or {}
+    
+    -- Numeric (Power)
     local mode_num = tonumber(mode)
     if mode_num then
         if mode_num == 0 then return t end
-        if mode_num > 0 then return t ^ mode_num end
-        return 1 - ((1 - t) ^ math.abs(mode_num))
+        if mode_num > 0 then return t ^ mode_num end -- Ease In
+        return 1 - ((1 - t) ^ math.abs(mode_num)) -- Ease Out
     end
-    -- Simplified easing support (add more if needed from slider)
+
+    -- Sine
     if mode == "sine-in" then return 1 - math.cos((t * math.pi) / 2)
     elseif mode == "sine-out" then return math.sin((t * math.pi) / 2)
     elseif mode == "sine-inout" then return -(math.cos(math.pi * t) - 1) / 2
+    
+    -- Quad
     elseif mode == "quad-in" then return t * t
     elseif mode == "quad-out" then return 1 - (1 - t) * (1 - t)
     elseif mode == "quad-inout" then return t < 0.5 and 2 * t * t or 1 - ((-2 * t + 2)^2) / 2
+    
+    -- Cubic
+    elseif mode == "cubic-in" then return t * t * t
+    elseif mode == "cubic-out" then return 1 - (1 - t)^3
+    elseif mode == "cubic-inout" then return t < 0.5 and 4 * t * t * t or 1 - ((-2 * t + 2)^3) / 2
+    
+    -- Quart
+    elseif mode == "quart-in" then return t * t * t * t
+    elseif mode == "quart-out" then return 1 - (1 - t)^4
+    elseif mode == "quart-inout" then return t < 0.5 and 8 * t * t * t * t or 1 - ((-2 * t + 2)^4) / 2
+    
+    -- Quint
+    elseif mode == "quint-in" then return t * t * t * t * t
+    elseif mode == "quint-out" then return 1 - (1 - t)^5
+    elseif mode == "quint-inout" then return t < 0.5 and 16 * t * t * t * t * t or 1 - ((-2 * t + 2)^5) / 2
+    
+    -- Sextic (Power of 6)
+    elseif mode == "sextic-in" then return t^6
+    elseif mode == "sextic-out" then return 1 - (1 - t)^6
+    elseif mode == "sextic-inout" then return t < 0.5 and 32 * t^6 or 1 - ((-2 * t + 2)^6) / 2
+    
+    -- Expo
+    elseif mode == "expo-in" then return t == 0 and 0 or 2^(10 * t - 10)
+    elseif mode == "expo-out" then return t == 1 and 1 or 1 - 2^(-10 * t)
+    elseif mode == "expo-inout" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        if t < 0.5 then return (2^(20 * t - 10)) / 2 end
+        return (2 - 2^(-20 * t + 10)) / 2
+    
+    -- Circ
+    elseif mode == "circ-in" then return 1 - math.sqrt(1 - t^2)
+    elseif mode == "circ-out" then return math.sqrt(1 - (t - 1)^2)
+    elseif mode == "circ-inout" then
+        if t < 0.5 then return (1 - math.sqrt(1 - (2 * t)^2)) / 2 end
+        return (math.sqrt(1 - (-2 * t + 2)^2) + 1) / 2
+    
+    -- Back
+    elseif mode == "back-in" then 
+        local c1 = params[1] or 1.70158; local c3 = c1 + 1
+        return c3 * t * t * t - c1 * t * t
+    elseif mode == "back-out" then 
+        local c1 = params[1] or 1.70158; local c3 = c1 + 1
+        return 1 + c3 * (t - 1)^3 + c1 * (t - 1)^2
+    elseif mode == "back-inout" then
+        local c1 = params[1] or 1.70158; local c2 = c1 * 1.525
+        if t < 0.5 then
+            return ((2 * t)^2 * ((c2 + 1) * 2 * t - c2)) / 2
+        end
+        return ((2 * t - 2)^2 * ((c2 + 1) * (t * 2 - 2) + c2) + 2) / 2
+
+    -- Elastic
+    elseif mode == "elastic-in" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        local a = params[1] or 1
+        local p = params[2] or 0.3
+        local s
+        if a < 1 then a = 1; s = p / 4 else s = p / (2 * math.pi) * math.asin(1 / a) end
+        return -(a * 2^(10 * (t - 1)) * math.sin((t - 1 - s) * (2 * math.pi) / p))
+    elseif mode == "elastic-out" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        local a = params[1] or 1
+        local p = params[2] or 0.3
+        local s
+        if a < 1 then a = 1; s = p / 4 else s = p / (2 * math.pi) * math.asin(1 / a) end
+        return a * 2^(-10 * t) * math.sin((t - s) * (2 * math.pi) / p) + 1
+    elseif mode == "elastic-inout" then
+        if t == 0 then return 0 end
+        if t == 1 then return 1 end
+        local a = params[1] or 1
+        local p = params[2] or 0.45
+        local s
+        if a < 1 then a = 1; s = p / 4 else s = p / (2 * math.pi) * math.asin(1 / a) end
+        t = t * 2
+        if t < 1 then
+            return -0.5 * (a * 2^(10 * (t - 1)) * math.sin((t - 1 - s) * (2 * math.pi) / p))
+        end
+        return a * 2^(-10 * (t - 1)) * math.sin((t - 1 - s) * (2 * math.pi) / p) * 0.5 + 1
+    
+    -- Bounce
+    elseif mode == "bounce-out" then
+        local e = params[1] or 0.5
+        -- Clamp elasticity to reasonable bounds
+        if e < 0 then e = 0.1 end
+        if e >= 1 then e = 0.99 end
+        
+        local t1 = (1 - e) / (1 + e)
+        local k = 1 / (t1 * t1)
+        
+        if t < t1 then
+            return k * t * t
+        end
+        
+        local t_curr = t - t1
+        local duration = 2 * e * t1
+        local height = e * e
+        
+        -- Simulate bounces
+        for i=1, 50 do
+            if t_curr < duration then
+                local half = duration / 2
+                local x = t_curr - half
+                return 1 - height + k * x * x
+            end
+            
+            t_curr = t_curr - duration
+            duration = duration * e
+            height = height * e * e
+            
+            if height < 0.000001 then return 1 end
+        end
+        return 1
+
+    elseif mode == "bounce-in" then return 1 - self:calculate_easing(1 - t, "bounce-out", params)
+    elseif mode == "bounce-inout" then
+        if t < 0.5 then return (1 - self:calculate_easing(1 - 2 * t, "bounce-out", params)) / 2 end
+        return (1 + self:calculate_easing(2 * t - 1, "bounce-out", params)) / 2
+    
+    -- Hann
+    elseif mode == "hann" then return 0.5 * (1 - math.cos(math.pi * t))
     end
+
     return t
 end
 

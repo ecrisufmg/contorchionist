@@ -20,6 +20,8 @@
 local ArgParser = require("pd_arg_parser")
 local Colors = require("colors")
 
+local unpack = unpack or table.unpack
+
 local ctgui_slider = pd.Class:new():register("ctgui.slider")
 
 -- Default Colors (HSB)
@@ -65,6 +67,10 @@ function ctgui_slider:initialize(sel, atoms)
     local default_max = (self.mode == "db") and 12 or 1
     self.min_val = parser:get_float("min minimum", default_min)
     self.max_val = parser:get_float("max maximum", default_max)
+
+    -- Flags
+    self.pos_mode = parser:has_flag("pos")
+    self.route_mode = parser:has_flag("route")
 
     -- Colors
     
@@ -251,8 +257,13 @@ function ctgui_slider:initialize(sel, atoms)
     end
 
     -- Inlets/Outlets
-    self.inlets = 2
-    self.outlets = 2
+    if self.pos_mode then
+        self.inlets = 2
+        self.outlets = 2
+    else
+        self.inlets = 1
+        self.outlets = 1
+    end
 
     -- Initial visual pos
     self.handle_size = 10
@@ -654,28 +665,65 @@ function ctgui_slider:line_tick()
     end
 end
 
+-- Input Helpers
+
+function ctgui_slider:parse_line_args(atoms)
+    local target = atoms[1]
+    local time = (type(atoms[2]) == "number") and atoms[2] or self.default_line_ms
+    local easing = (type(atoms[3]) == "string" or type(atoms[3]) == "number") and atoms[3] or nil
+    local params = nil
+    if #atoms >= 4 then
+        params = {}
+        for i=4, #atoms do table.insert(params, atoms[i]) end
+    end
+    return target, time, easing, params
+end
+
 -- Input
 
 function ctgui_slider:in_1_list(atoms)
-    if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
-        if #atoms >= 2 and type(atoms[2]) == "number" and atoms[2] > 0 then
-            local easing = nil
-            local params = nil
-            if #atoms >= 3 then easing = atoms[3] end
-            if #atoms >= 4 then
-                params = {}
-                for i=4, #atoms do table.insert(params, atoms[i]) end
-            end
-            self:start_line(atoms[1], atoms[2], easing, params)
-        else
-            if self.default_line_ms > 0 then
-                self:start_line(atoms[1], self.default_line_ms)
-            else
-                self:in_1_float(atoms[1])
-            end
+    local sel = atoms[1]
+    
+    if sel == "pos" then
+        if type(atoms[2]) == "number" then
+            local args = {unpack(atoms, 2)}
+            local target_pos, time, easing, params = self:parse_line_args(args)
+            local target_val = self:visual_to_value(target_pos)
+            self:start_line(target_val, time, easing, params)
         end
+        return
+    elseif sel == "val" or sel == "value" then
+        if type(atoms[2]) == "number" then
+            local args = {unpack(atoms, 2)}
+            local target, time, easing, params = self:parse_line_args(args)
+            self:start_line(target, time, easing, params)
+        end
+        return
+    end
+
+    if type(sel) == "number" then
+        local target, time, easing, params = self:parse_line_args(atoms)
+        self:start_line(target, time, easing, params)
+    end
+end
+
+function ctgui_slider:in_1_pos(atoms)
+    if type(atoms) == "table" then
+        local target_pos, time, easing, params = self:parse_line_args(atoms)
+        local target_val = self:visual_to_value(target_pos)
+        self:start_line(target_val, time, easing, params)
     elseif type(atoms) == "number" then
-        self:in_1_float(atoms)
+        local target_val = self:visual_to_value(atoms)
+        self:start_line(target_val, self.default_line_ms)
+    end
+end
+
+function ctgui_slider:in_1_val(atoms)
+    if type(atoms) == "table" then
+        local target, time, easing, params = self:parse_line_args(atoms)
+        self:start_line(target, time, easing, params)
+    elseif type(atoms) == "number" then
+        self:start_line(atoms, self.default_line_ms)
     end
 end
 
@@ -689,10 +737,6 @@ function ctgui_slider:in_1_float(f)
     self.current_value = math.max(self.min_val, math.min(self.max_val, f))
     self:update_visual_from_value()
     self:throttled_repaint()
-    -- Do not output on input to avoid loops, usually? 
-    -- Standard PD slider outputs on set? No, usually not.
-    -- But if it's a "set" message vs float.
-    -- Float usually sets and outputs.
     self:output_value()
 end
 
@@ -704,29 +748,29 @@ function ctgui_slider:in_1_set(f)
 end
 
 function ctgui_slider:in_2_list(atoms)
+    if not self.pos_mode then return end
     if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
-        if #atoms >= 2 and type(atoms[2]) == "number" and atoms[2] > 0 then
-            local f = atoms[1]
-            local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
-            norm = math.max(0, math.min(1, norm))
-            local target = self:visual_to_value(norm)
-            local easing = nil
-            local params = nil
-            if #atoms >= 3 then easing = atoms[3] end
-            if #atoms >= 4 then
-                params = {}
-                for i=4, #atoms do table.insert(params, atoms[i]) end
-            end
-            self:start_line(target, atoms[2], easing, params)
-        else
-            self:in_2_float(atoms[1])
+        local f = atoms[1]
+        local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
+        norm = math.max(0, math.min(1, norm))
+        local target = self:visual_to_value(norm)
+        
+        local time = (type(atoms[2]) == "number") and atoms[2] or self.default_line_ms
+        local easing = (type(atoms[3]) == "string" or type(atoms[3]) == "number") and atoms[3] or nil
+        local params = nil
+        if #atoms >= 4 then
+            params = {}
+            for i=4, #atoms do table.insert(params, atoms[i]) end
         end
+        
+        self:start_line(target, time, easing, params)
     elseif type(atoms) == "number" then
         self:in_2_float(atoms)
     end
 end
 
 function ctgui_slider:in_2_float(f)
+    if not self.pos_mode then return end
     if self.default_line_ms and self.default_line_ms > 0 then
         local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
         norm = math.max(0, math.min(1, norm))
@@ -760,9 +804,17 @@ function ctgui_slider:output_value()
         
         self:throttled_data_output()
     else
-        self:outlet(1, "float", {self.current_value})
-        local ctrl_val = self.v_out_min + self.visual_pos * (self.v_out_max - self.v_out_min)
-        self:outlet(2, "float", {ctrl_val})
+        if self.route_mode then
+            self:outlet(1, "val", {self.current_value})
+            local ctrl_val = self.v_out_min + self.visual_pos * (self.v_out_max - self.v_out_min)
+            self:outlet(1, "pos", {ctrl_val})
+        elseif self.pos_mode then
+            self:outlet(1, "float", {self.current_value})
+            local ctrl_val = self.v_out_min + self.visual_pos * (self.v_out_max - self.v_out_min)
+            self:outlet(2, "float", {ctrl_val})
+        else
+            self:outlet(1, "float", {self.current_value})
+        end
     end
 end
 
@@ -773,12 +825,20 @@ function ctgui_slider:throttled_data_output()
     end
     
     if self.pending_out_changed then
-        self:outlet(1, "float", {self.pending_out_value})
+        if self.route_mode then
+            self:outlet(1, "val", {self.pending_out_value})
+        else
+            self:outlet(1, "float", {self.pending_out_value})
+        end
         self.pending_out_changed = false
     end
     
     if self.pending_ctrl_changed then
-        self:outlet(2, "float", {self.pending_ctrl_value})
+        if self.route_mode then
+            self:outlet(1, "pos", {self.pending_ctrl_value})
+        elseif self.pos_mode then
+            self:outlet(2, "float", {self.pending_ctrl_value})
+        end
         self.pending_ctrl_changed = false
     end
     
