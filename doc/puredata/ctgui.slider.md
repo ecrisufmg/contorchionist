@@ -1,29 +1,29 @@
-# ctgui.rslider
+# ctgui.slider
 
-A range slider with support for linear, logarithmic, and exponential mapping, advanced easing functions, and flexible I/O modes.
+A versatile slider with support for linear, logarithmic, and dB mapping, advanced easing functions, and flexible I/O modes.
 
 ## Usage
 
 ```pd
-[ctgui.rslider @min 0 @max 1 @mode lin]
+[ctgui.slider @min 0 @max 1 @mode lin]
 ```
 
 ## Arguments
 
-- `@min <val>`: Minimum value (default: 0).
-- `@max <val>`: Maximum value (default: 1).
+- `@min <val>`: Minimum value (default: 0 for lin/log, -120 for db).
+- `@max <val>`: Maximum value (default: 1 for lin/log, 12 for db).
 - `@mode <mode>`: Mapping mode.
   - `lin`: Linear (default).
   - `log`: Logarithmic.
   - `db`: Decibel (audio fader).
-  - `exp`: Exponential.
-- `@width <val>`: Width in pixels (default: 120).
-- `@height <val>`: Height in pixels (default: 20).
+- `@width <val>`: Width in pixels (default: 20).
+- `@height <val>`: Height in pixels (default: 120).
 - `@color <r g b>`: Handle color (RGB 0-255 or HSB 0-1).
 - `@bgcolor <r g b>`: Background color.
 - `@slotcolor <r g b>`: Slot/Track color.
+- `@markcolor <r g b>`: 0dB mark color (for db mode).
 - `@dark`: Enable dark mode theme.
-- `@pos`: Enable position mode (4 inlets/outlets).
+- `@pos`: Enable position mode (2 inlets/outlets).
 - `@route`: Enable route mode (single inlet/outlet with tagged messages).
 - `@guifps <val>`: GUI refresh rate limit (default: 20).
 - `@datafps <val>`: Data output rate limit (default: 0 = unlimited).
@@ -38,39 +38,27 @@ A range slider with support for linear, logarithmic, and exponential mapping, ad
 ## I/O Modes
 
 ### Default Mode
-- **Inlet 1**: Set low value (float) or list `low high [time] [easing]`.
-- **Inlet 2**: Set high value (float).
-- **Outlet 1**: Low value (float).
-- **Outlet 2**: High value (float).
+- **Inlet 1**: Set value (float) or list `target [time] [easing]`.
+- **Outlet 1**: Value (float).
 
 ### Position Mode (`@pos`)
-- **Inlet 1**: Set low value (float) or list `low high [time] [easing]`.
-- **Inlet 2**: Set high value (float).
-- **Inlet 3**: Set low position (0-1 or custom range).
-- **Inlet 4**: Set high position (0-1 or custom range).
-- **Outlet 1**: Low value (float).
-- **Outlet 2**: High value (float).
-- **Outlet 3**: Low position (scaled).
-- **Outlet 4**: High position (scaled).
+- **Inlet 1**: Set value (float) or list `target [time] [easing]`.
+- **Inlet 2**: Set position (0-1 or custom range).
+- **Outlet 1**: Value (float).
+- **Outlet 2**: Position (scaled).
 
 ### Route Mode (`@route`)
 - **Inlet 1**: Accepts tagged messages:
-  - `val <low> <high> [time] [easing]`: Set values.
-  - `pos <low> <high> [time] [easing]`: Set positions.
-  - `lo <val>`: Set low value.
-  - `hi <val>`: Set high value.
+  - `val <target> [time] [easing]`: Set value.
+  - `pos <target> [time] [easing]`: Set position.
 - **Outlet 1**: Outputs tagged messages:
-  - `val <low> <high>`
-  - `pos <low> <high>`
-  - `lo <val>`
-  - `hi <val>`
+  - `val <val>`
+  - `pos <val>`
 
 ## Messages
 
-- `set <low> <high>`: Set values without output.
-- `lo <val>`: Set low value.
-- `hi <val>`: Set high value.
-- `pos <low> <high>`: Set positions (visual 0-1).
+- `set <val>`: Set value without output.
+- `pos <val>`: Set position (visual 0-1).
 - `guifps <val>`: Set GUI refresh rate.
 - `datafps <val>`: Set data output rate.
 - `linems <val>`: Set default line time.
@@ -96,5 +84,5 @@ The object supports a wide range of Penner easing functions for smooth transitio
 - `hann`
 
 **Example:**
-To fade to 0.2 and 0.8 over 1000ms with elastic-out easing:
-`0.2 0.8 1000 elastic-out`
+To fade to 0.5 over 1000ms with elastic-out easing:
+`0.5 1000 elastic-out`
