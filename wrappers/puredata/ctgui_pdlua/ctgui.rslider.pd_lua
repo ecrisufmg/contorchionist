@@ -3,17 +3,18 @@
 -- Usage:
 --   [ctgui.rslider @min 0 @max 1 @mode lin]
 --   [ctgui.rslider @min -120 @max 12 @mode db]
+--   [ctgui.rslider @list] (Single inlet/outlet mode)
 --
 -- Arguments:
 --   @min <val>      : Minimum value (default: 0 for lin/log, -120 for db)
 --   @max <val>      : Maximum value (default: 1 for lin/log, 12 for db)
 --   @mode <mode>    : "lin" (linear), "log" (logarithmic), "db" (dbfader)
---   @width <val>    : Width (default: 20)
---   @height <val>   : Height (default: 120)
+--   @width <val>    : Width (default: 130)
+--   @height <val>   : Height (default: 20)
 --   @color <r g b>  : Handle color
 --   @bgcolor <r g b>: Background color
 --   @slotcolor <r g b>: Slot/Track color
---   @dark           : Dark mode theme
+--   @list           : Enable single inlet/outlet list mode
 --   @guifps <val>   : GUI refresh rate
 --   @datafps <val>  : Data output rate limit
 
@@ -46,7 +47,6 @@ function ctgui_rslider:initialize(sel, atoms)
     elseif parser:has_flag("horiz horizontal") then
         self.orientation = "horizontal"
     else
-        -- Inferred from dimensions
         self.orientation = (self.width > self.height) and "horizontal" or "vertical"
     end
 
@@ -66,12 +66,15 @@ function ctgui_rslider:initialize(sel, atoms)
     self.min_val = parser:get_float("min minimum", default_min)
     self.max_val = parser:get_float("max maximum", default_max)
 
+    -- List Mode
+    self.list_mode = parser:has_flag("list")
+    self.pos_output = parser:has_flag("posoutput")
+
     -- Initial Values
     local default_init = (self.mode == "db") and self.min_val or 0.0
     local init_low = default_init
     local init_high = default_init
     
-    -- Check for flags
     if parser:has_flag("low lo") then
         init_low = parser:get_float("low lo", default_init)
     end
@@ -79,21 +82,17 @@ function ctgui_rslider:initialize(sel, atoms)
         init_high = parser:get_float("high hi", default_init)
     end
     
-    -- Clamp to min/max
+    -- Clamp
     init_low = math.max(self.min_val, math.min(self.max_val, init_low))
     init_high = math.max(self.min_val, math.min(self.max_val, init_high))
 
     -- Colors
-    
-    -- Helper: RGB to HSB (0-1)
     local function rgb_to_hsb(r, g, b)
         local max = math.max(r, g, b)
         local min = math.min(r, g, b)
         local delta = max - min
         local h, s, v = 0, 0, max
-
         if max > 0 then s = delta / max else s = 0 end
-        
         if delta > 0 then
             if r == max then h = (g - b) / delta
             elseif g == max then h = 2 + (b - r) / delta
@@ -105,59 +104,6 @@ function ctgui_rslider:initialize(sel, atoms)
         return h, s, v
     end
 
-    -- Helper to get color from flags (RGB or HSB) or default
-    local function get_color(name, default_hsb)
-        -- Check for @namecolor (e.g. @playcolor)
-        local val = parser:get_value(name .. "color")
-        
-        local h, s, b = default_hsb[1], default_hsb[2], default_hsb[3]
-        local source = "default"
-
-        if type(val) == "table" then
-            -- Check for format: {"rgb", r, g, b} or {"hsb", h, s, b}
-            if type(val[1]) == "string" then
-                local mode = val[1]
-                if (mode == "rgb" or mode == "RGB") and #val >= 4 then
-                    h, s, b = rgb_to_hsb(val[2], val[3], val[4])
-                    source = "rgb"
-                elseif (mode == "hsb" or mode == "HSB" or mode == "hsl" or mode == "HSL") and #val >= 4 then
-                    h, s, b = val[2], val[3], val[4]
-                    source = "hsb"
-                end
-            -- Check for format: {h, s, b} (implicit HSB)
-            elseif type(val[1]) == "number" and #val >= 3 then
-                h, s, b = val[1], val[2], val[3]
-                source = "hsb"
-            end
-        end
-
-        -- Convert to RGB (0-255) for drawing
-        local r, g, b_val = Colors.hsb(h, s, b)
-        return {r, g, b_val, source=source, h=h, s=s, b=b}
-    end
-
-    -- Dark mode
-    local is_dark = parser:get_bool("dark")
-    
-    self.c_bg = get_color("bg", is_dark and C_BG_DARK or C_BG_LIGHT)
-    -- Also check "bgcolor" for backward compatibility if needed, but get_color checks "name" .. "color"
-    -- So "bg" -> "bgcolor". 
-    -- But wait, previous code checked "bgcolor" AND "bg".
-    -- parser:get_value("bgcolor") might be needed if user uses @bgcolor.
-    -- My get_color does `name .. "color"`. So `get_color("bg")` checks `@bgcolor`.
-    -- If user uses `@bg`, it won't be found by `get_color("bg")` which looks for `@bgcolor`.
-    -- Let's adjust get_color to check both if needed, or just pass "bg" and rely on "bgcolor".
-    -- The previous code used `parse_color("bgcolor bg", ...)` which checked both.
-    
-    -- Let's refine get_color to take a list of keys or handle the suffix better.
-    -- Or just manually check.
-    
-    -- Actually, let's stick to the pattern:
-    -- get_color("bg") -> checks @bgcolor.
-    -- If I want to check @bg, I need to pass it.
-    
-    -- Let's redefine get_color to be more flexible.
-    
     local function get_color_flexible(keys, default_hsb)
         local val = nil
         for _, key in ipairs(keys) do
@@ -188,6 +134,7 @@ function ctgui_rslider:initialize(sel, atoms)
         return {r, g, b_val, source=source, h=h, s=s, b=b}
     end
 
+    local is_dark = parser:get_bool("dark")
     self.c_bg = get_color_flexible({"bgcolor", "bg"}, is_dark and C_BG_DARK or C_BG_LIGHT)
     self.c_slot = get_color_flexible({"slotcolor", "trackcolor"}, is_dark and C_SLOT_DARK or C_SLOT_LIGHT)
     self.c_handle = get_color_flexible({"color", "handlecolor"}, is_dark and C_HANDLE_DARK or C_HANDLE_LIGHT)
@@ -223,42 +170,51 @@ function ctgui_rslider:initialize(sel, atoms)
     self.pending_ctrl_high = nil
     self.pending_ctrl_changed = false
 
+    -- Line Clocks
+    self.line_clock_low = pd.Clock:new():register(self, "line_tick_low")
+    self.line_running_low = false
+    
+    self.line_clock_high = pd.Clock:new():register(self, "line_tick_high")
+    self.line_running_high = false
+
+    self.line_grain = parser:get_float("linegrain", 20)
+    self.default_line_ms = parser:get_float("linems", 0)
+    
+    -- Easing
+    local curve = parser:get_value("reasing curve easing")
+    if type(curve) == "number" or type(curve) == "string" then
+        self.default_easing = curve
+    else
+        self.default_easing = "line"
+    end
+
     -- Controller Input/Output
-    -- Default to normalized 0-1
     self.v_in_min = 0
     self.v_in_max = 1
     self.v_out_min = 0
     self.v_out_max = 1
 
     if parser:has_flag("ctin") then
-        self.v_in_min = 0
-        self.v_in_max = 127
-        self.v_out_min = 0
-        self.v_out_max = 127
+        self.v_in_min = 0; self.v_in_max = 127
+        self.v_out_min = 0; self.v_out_max = 127
     end
-
     if parser:has_flag("bendin") then
-        self.v_in_min = 0
-        self.v_in_max = 16383
-        self.v_out_min = 0
-        self.v_out_max = 16383
+        self.v_in_min = 0; self.v_in_max = 16383
+        self.v_out_min = 0; self.v_out_max = 16383
     end
-
     local valin = parser:get_float_list("valin")
-    if #valin >= 2 then
-        self.v_in_min = valin[1]
-        self.v_in_max = valin[2]
-    end
-
+    if #valin >= 2 then self.v_in_min = valin[1]; self.v_in_max = valin[2] end
     local valout = parser:get_float_list("valout")
-    if #valout >= 2 then
-        self.v_out_min = valout[1]
-        self.v_out_max = valout[2]
-    end
+    if #valout >= 2 then self.v_out_min = valout[1]; self.v_out_max = valout[2] end
 
     -- Inlets/Outlets
-    self.inlets = 2
-    self.outlets = 2
+    if self.list_mode then
+        self.inlets = 1
+        self.outlets = 1
+    else
+        self.inlets = 2
+        self.outlets = self.pos_output and 3 or 2
+    end
 
     -- Initial visual pos
     self:update_visual_from_value()
@@ -272,35 +228,20 @@ end
 
 function ctgui_rslider:get_handle_size()
     local max_dim = (self.orientation == "vertical") and self.width or self.height
-    -- Reduce handler size slightly (80% of available space)
     local handle_size = (max_dim - 4) * 0.66
     if handle_size < 4 then handle_size = 4 end
     return handle_size
 end
 
 function ctgui_rslider:get_zero_visual()
-    -- Calculate visual position (0-1) that corresponds to 0dB
-    -- to align with ctgui.vu which uses 0.85 of (height-2)
-    
     local vu_zero_ratio = 0.85
     local vu_margin = 2
-    
     local dim = (self.orientation == "vertical") and self.height or self.width
     local handle = self:get_handle_size()
-    
-    -- VU 0dB position from bottom (pixels)
     local vu_zero_px = vu_zero_ratio * (dim - vu_margin)
-    
-    -- Slider 0dB position from bottom (pixels)
-    -- pos_px = handle/2 + visual * (dim - handle)
-    -- We want pos_px = vu_zero_px
-    
     local slider_track_len = dim - handle
     if slider_track_len <= 0 then return 0.85 end
-    
     local visual = (vu_zero_px - (handle / 2)) / slider_track_len
-    
-    -- Clamp to reasonable bounds
     return math.max(0.1, math.min(0.9, visual))
 end
 
@@ -352,22 +293,13 @@ function ctgui_rslider:visual_to_value(vis)
     return self.min_val
 end
 
--- DB Transfer Functions (Copied/Adapted from ctgui.vu)
 function ctgui_rslider:db_to_visual(db)
-    -- Clamp db
     db = math.max(self.min_val, math.min(self.max_val, db))
-    
-    -- Zero point visual (0dB)
-    -- Calculated dynamically to align with ctgui.vu
     local zero_visual = self:get_zero_visual()
-    
-    -- If 0 is not in range, this logic might be weird, but for a fader usually it is.
-    -- Let's assume standard audio fader range.
     
     if db <= 0 then
         local linear = (db - self.min_val) / (0 - self.min_val)
         linear = math.max(0, math.min(1, linear))
-        
         local visual
         if linear < 0.5 then
             visual = (0.2 * zero_visual) * (linear / 0.5)
@@ -400,12 +332,10 @@ function ctgui_rslider:visual_to_db(visual)
             local t = (visual - 0.5 * zero_visual) / (0.5 * zero_visual)
             linear = 0.833 + (0.167 * t)
         end
-        local db = self.min_val + (linear * (0 - self.min_val))
-        return db
+        return self.min_val + (linear * (0 - self.min_val))
     else
         local t = (visual - zero_visual) / (1.0 - zero_visual)
-        local db = 0 + (t * (self.max_val - 0))
-        return db
+        return 0 + (t * (self.max_val - 0))
     end
 end
 
@@ -419,14 +349,10 @@ end
 function ctgui_rslider:set_value_from_mouse(x, y)
     local vis
     if self.orientation == "vertical" then
-        -- 0 at bottom, 1 at top
         vis = 1.0 - (y / self.height)
     else
-        -- 0 at left, 1 at right
         vis = x / self.width
     end
-    
-    -- Clamp
     vis = math.max(0, math.min(1, vis))
     
     if self.drag_target == "low" then
@@ -442,12 +368,8 @@ function ctgui_rslider:set_value_from_mouse(x, y)
         local new_vis_low = self.drag_start_vis_low + delta
         local new_vis_high = self.drag_start_vis_high + delta
         
-        -- Clamp visual
-        if new_vis_low < 0 then
-            delta = -self.drag_start_vis_low
-        elseif new_vis_high > 1 then
-            delta = 1 - self.drag_start_vis_high
-        end
+        if new_vis_low < 0 then delta = -self.drag_start_vis_low
+        elseif new_vis_high > 1 then delta = 1 - self.drag_start_vis_high end
         
         new_vis_low = self.drag_start_vis_low + delta
         new_vis_high = self.drag_start_vis_high + delta
@@ -458,12 +380,13 @@ function ctgui_rslider:set_value_from_mouse(x, y)
         self.val_high = self:visual_to_value(new_vis_high)
     end
     
-    -- Output
     self:output_value()
     self:throttled_repaint()
 end
 
 function ctgui_rslider:mouse_down(x, y, button, mod)
+    self:stop_line_low()
+    self:stop_line_high()
     self.dragging = true
     
     local vis
@@ -474,8 +397,7 @@ function ctgui_rslider:mouse_down(x, y, button, mod)
     end
     vis = math.max(0, math.min(1, vis))
     
-    -- Determine target
-    local margin = 0.05 -- 5% margin
+    local margin = 0.05
     if vis > (self.vis_low + margin) and vis < (self.vis_high - margin) then
         self.drag_target = "both"
         self.drag_start_vis = vis
@@ -491,14 +413,11 @@ function ctgui_rslider:mouse_down(x, y, button, mod)
         end
         self:set_value_from_mouse(x, y)
     end
-    
     return true
 end
 
 function ctgui_rslider:mouse_drag(x, y, button, mod)
-    if self.dragging then
-        self:set_value_from_mouse(x, y)
-    end
+    if self.dragging then self:set_value_from_mouse(x, y) end
 end
 
 function ctgui_rslider:mouse_up(x, y, button, mod)
@@ -506,89 +425,358 @@ function ctgui_rslider:mouse_up(x, y, button, mod)
     self.drag_target = nil
 end
 
--- Input
+-- Line Logic
 
-function ctgui_rslider:in_1_list(atoms)
-    if #atoms >= 2 and type(atoms[1]) == "number" and type(atoms[2]) == "number" then
-        local l = math.max(self.min_val, math.min(self.max_val, atoms[1]))
-        local h = math.max(self.min_val, math.min(self.max_val, atoms[2]))
-        self.val_low = math.min(l, h)
-        self.val_high = math.max(l, h)
+function ctgui_rslider:calculate_easing(t, mode, params)
+    if mode == "linear" or mode == "line" then return t end
+    params = params or {}
+    local mode_num = tonumber(mode)
+    if mode_num then
+        if mode_num == 0 then return t end
+        if mode_num > 0 then return t ^ mode_num end
+        return 1 - ((1 - t) ^ math.abs(mode_num))
+    end
+    -- Simplified easing support (add more if needed from slider)
+    if mode == "sine-in" then return 1 - math.cos((t * math.pi) / 2)
+    elseif mode == "sine-out" then return math.sin((t * math.pi) / 2)
+    elseif mode == "sine-inout" then return -(math.cos(math.pi * t) - 1) / 2
+    elseif mode == "quad-in" then return t * t
+    elseif mode == "quad-out" then return 1 - (1 - t) * (1 - t)
+    elseif mode == "quad-inout" then return t < 0.5 and 2 * t * t or 1 - ((-2 * t + 2)^2) / 2
+    end
+    return t
+end
+
+function ctgui_rslider:stop_line_low()
+    if self.line_running_low then
+        self.line_clock_low:unset()
+        self.line_running_low = false
+    end
+end
+
+function ctgui_rslider:stop_line_high()
+    if self.line_running_high then
+        self.line_clock_high:unset()
+        self.line_running_high = false
+    end
+end
+
+function ctgui_rslider:start_line_low(target, time_ms, easing, params)
+    self:stop_line_low()
+    target = math.max(self.min_val, math.min(self.max_val, target))
+    
+    if time_ms <= 0 then
+        self.val_low = math.min(target, self.val_high)
         self:update_visual_from_value()
         self:throttled_repaint()
         self:output_value()
-    elseif #atoms == 1 and type(atoms[1]) == "number" then
-        self:in_1_float(atoms[1])
+        return
+    end
+    
+    local ticks = math.ceil(time_ms / self.line_grain)
+    if ticks < 1 then ticks = 1 end
+    
+    self.line_target_low = target
+    self.line_start_val_low = self.val_low
+    self.line_total_ticks_low = ticks
+    self.line_current_tick_low = 0
+    self.line_easing_low = easing or self.default_easing
+    self.line_easing_params_low = params or {}
+    
+    self.line_running_low = true
+    self.line_clock_low:delay(self.line_grain)
+end
+
+function ctgui_rslider:start_line_high(target, time_ms, easing, params)
+    self:stop_line_high()
+    target = math.max(self.min_val, math.min(self.max_val, target))
+    
+    if time_ms <= 0 then
+        self.val_high = math.max(target, self.val_low)
+        self:update_visual_from_value()
+        self:throttled_repaint()
+        self:output_value()
+        return
+    end
+    
+    local ticks = math.ceil(time_ms / self.line_grain)
+    if ticks < 1 then ticks = 1 end
+    
+    self.line_target_high = target
+    self.line_start_val_high = self.val_high
+    self.line_total_ticks_high = ticks
+    self.line_current_tick_high = 0
+    self.line_easing_high = easing or self.default_easing
+    self.line_easing_params_high = params or {}
+    
+    self.line_running_high = true
+    self.line_clock_high:delay(self.line_grain)
+end
+
+function ctgui_rslider:line_tick_low()
+    if not self.line_running_low then return end
+    self.line_current_tick_low = self.line_current_tick_low + 1
+    local t = self.line_current_tick_low / self.line_total_ticks_low
+    if t > 1 then t = 1 end
+    
+    local eased_t = self:calculate_easing(t, self.line_easing_low, self.line_easing_params_low)
+    local new_val = self.line_start_val_low + (self.line_target_low - self.line_start_val_low) * eased_t
+    
+    self.val_low = math.min(new_val, self.val_high)
+    self:update_visual_from_value()
+    self:output_value()
+    self:throttled_repaint()
+    
+    if self.line_current_tick_low >= self.line_total_ticks_low then
+        self.line_running_low = false
+    else
+        self.line_clock_low:delay(self.line_grain)
+    end
+end
+
+function ctgui_rslider:line_tick_high()
+    if not self.line_running_high then return end
+    self.line_current_tick_high = self.line_current_tick_high + 1
+    local t = self.line_current_tick_high / self.line_total_ticks_high
+    if t > 1 then t = 1 end
+    
+    local eased_t = self:calculate_easing(t, self.line_easing_high, self.line_easing_params_high)
+    local new_val = self.line_start_val_high + (self.line_target_high - self.line_start_val_high) * eased_t
+    
+    self.val_high = math.max(new_val, self.val_low)
+    self:update_visual_from_value()
+    self:output_value()
+    self:throttled_repaint()
+    
+    if self.line_current_tick_high >= self.line_total_ticks_high then
+        self.line_running_high = false
+    else
+        self.line_clock_high:delay(self.line_grain)
+    end
+end
+
+-- Input Handlers
+
+function ctgui_rslider:parse_line_args(atoms)
+    local target = atoms[1]
+    local time = (type(atoms[2]) == "number") and atoms[2] or self.default_line_ms
+    local easing = (type(atoms[3]) == "string" or type(atoms[3]) == "number") and atoms[3] or nil
+    local params = nil
+    if #atoms >= 4 then
+        params = {}
+        for i=4, #atoms do table.insert(params, atoms[i]) end
+    end
+    return target, time, easing, params
+end
+
+-- List Mode Handlers
+function ctgui_rslider:in_1_lo(atoms)
+    if not self.list_mode then return end
+    if type(atoms) == "table" then
+        local target, time, easing, params = self:parse_line_args(atoms)
+        self:start_line_low(target, time, easing, params)
+    elseif type(atoms) == "number" then
+        self:start_line_low(atoms, self.default_line_ms)
+    end
+end
+function ctgui_rslider:in_1_low(atoms) self:in_1_lo(atoms) end
+
+function ctgui_rslider:in_1_hi(atoms)
+    if not self.list_mode then return end
+    if type(atoms) == "table" then
+        local target, time, easing, params = self:parse_line_args(atoms)
+        self:start_line_high(target, time, easing, params)
+    elseif type(atoms) == "number" then
+        self:start_line_high(atoms, self.default_line_ms)
+    end
+end
+function ctgui_rslider:in_1_high(atoms) self:in_1_hi(atoms) end
+
+function ctgui_rslider:in_1_lopos(atoms)
+    if not self.list_mode then return end
+    if type(atoms) == "table" then
+        local target_pos, time, easing, params = self:parse_line_args(atoms)
+        local target_val = self:visual_to_value(target_pos)
+        self:start_line_low(target_val, time, easing, params)
+    elseif type(atoms) == "number" then
+        local target_val = self:visual_to_value(atoms)
+        self:start_line_low(target_val, self.default_line_ms)
+    end
+end
+function ctgui_rslider:in_1_lowpos(atoms) self:in_1_lopos(atoms) end
+
+function ctgui_rslider:in_1_hipos(atoms)
+    if not self.list_mode then return end
+    if type(atoms) == "table" then
+        local target_pos, time, easing, params = self:parse_line_args(atoms)
+        local target_val = self:visual_to_value(target_pos)
+        self:start_line_high(target_val, time, easing, params)
+    elseif type(atoms) == "number" then
+        local target_val = self:visual_to_value(atoms)
+        self:start_line_high(target_val, self.default_line_ms)
+    end
+end
+function ctgui_rslider:in_1_highpos(atoms) self:in_1_hipos(atoms) end
+
+function ctgui_rslider:in_1_list(atoms)
+    if self.list_mode then
+        -- List Mode: Parse messages (e.g. "list lo ...")
+        local sel = atoms[1]
+        if sel == "lo" or sel == "low" then
+            if type(atoms[2]) == "number" then
+                local args = {unpack(atoms, 2)}
+                local target, time, easing, params = self:parse_line_args(args)
+                self:start_line_low(target, time, easing, params)
+            end
+        elseif sel == "hi" or sel == "high" then
+            if type(atoms[2]) == "number" then
+                local args = {unpack(atoms, 2)}
+                local target, time, easing, params = self:parse_line_args(args)
+                self:start_line_high(target, time, easing, params)
+            end
+        elseif sel == "lopos" or sel == "lowpos" then
+            if type(atoms[2]) == "number" then
+                local args = {unpack(atoms, 2)}
+                local target_pos, time, easing, params = self:parse_line_args(args)
+                local target_val = self:visual_to_value(target_pos)
+                self:start_line_low(target_val, time, easing, params)
+            end
+        elseif sel == "hipos" or sel == "highpos" then
+            if type(atoms[2]) == "number" then
+                local args = {unpack(atoms, 2)}
+                local target_pos, time, easing, params = self:parse_line_args(args)
+                local target_val = self:visual_to_value(target_pos)
+                self:start_line_high(target_val, time, easing, params)
+            end
+        end
+    else
+        -- Standard Mode: Inlet 1 is Low Value or Pos
+        if atoms[1] == "pos" then
+            if type(atoms[2]) == "number" then
+                local args = {unpack(atoms, 2)}
+                local target_pos, time, easing, params = self:parse_line_args(args)
+                local target_val = self:visual_to_value(target_pos)
+                self:start_line_low(target_val, time, easing, params)
+            end
+        elseif type(atoms[1]) == "number" then
+            local target, time, easing, params = self:parse_line_args(atoms)
+            self:start_line_low(target, time, easing, params)
+        end
+    end
+end
+
+function ctgui_rslider:in_1_pos(atoms)
+    if self.list_mode then return end
+    if type(atoms) == "table" then
+        local target_pos, time, easing, params = self:parse_line_args(atoms)
+        local target_val = self:visual_to_value(target_pos)
+        self:start_line_low(target_val, time, easing, params)
+    elseif type(atoms) == "number" then
+        local target_val = self:visual_to_value(atoms)
+        self:start_line_low(target_val, self.default_line_ms)
     end
 end
 
 function ctgui_rslider:in_1_float(f)
-    -- Treat single float as setting low value
-    local l = math.max(self.min_val, math.min(self.max_val, f))
-    self.val_low = math.min(l, self.val_high)
-    self:update_visual_from_value()
-    self:throttled_repaint()
-    self:output_value()
-end
-
-function ctgui_rslider:in_1_set(atoms)
-    if type(atoms) == "table" and #atoms >= 2 then
-        local l = math.max(self.min_val, math.min(self.max_val, atoms[1]))
-        local h = math.max(self.min_val, math.min(self.max_val, atoms[2]))
-        self.val_low = math.min(l, h)
-        self.val_high = math.max(l, h)
-    elseif type(atoms) == "number" then
-        local l = math.max(self.min_val, math.min(self.max_val, atoms))
-        self.val_low = math.min(l, self.val_high)
-    end
-    self:update_visual_from_value()
-    self:throttled_repaint()
-end
-
-function ctgui_rslider:in_2_list(atoms)
-    -- Controller input (normalized or MIDI)
-    if #atoms >= 2 and type(atoms[1]) == "number" and type(atoms[2]) == "number" then
-        local l_in = atoms[1]
-        local h_in = atoms[2]
-        
-        -- Map from input range to 0-1
-        local norm_l = (l_in - self.v_in_min) / (self.v_in_max - self.v_in_min)
-        local norm_h = (h_in - self.v_in_min) / (self.v_in_max - self.v_in_min)
-        
-        norm_l = math.max(0, math.min(1, norm_l))
-        norm_h = math.max(0, math.min(1, norm_h))
-        
-        self.vis_low = math.min(norm_l, norm_h)
-        self.vis_high = math.max(norm_l, norm_h)
-        
-        self.val_low = self:visual_to_value(self.vis_low)
-        self.val_high = self:visual_to_value(self.vis_high)
-        
-        self:output_value()
+    if self.list_mode then return end
+    if self.default_line_ms > 0 then
+        self:start_line_low(f, self.default_line_ms)
+    else
+        self:stop_line_low()
+        self.val_low = math.min(f, self.val_high)
+        self:update_visual_from_value()
         self:throttled_repaint()
+        self:output_value()
     end
 end
 
--- Output Throttling
+function ctgui_rslider:in_1_set(f)
+    if self.list_mode then return end
+    self:stop_line_low()
+    self.val_low = math.min(f, self.val_high)
+    self:update_visual_from_value()
+    self:throttled_repaint()
+end
+
+-- Inlet 2: High Value
+function ctgui_rslider:in_2_list(atoms)
+    if self.list_mode then return end
+    if atoms[1] == "pos" then
+        if type(atoms[2]) == "number" then
+            local args = {unpack(atoms, 2)}
+            local target_pos, time, easing, params = self:parse_line_args(args)
+            local target_val = self:visual_to_value(target_pos)
+            self:start_line_high(target_val, time, easing, params)
+        end
+    elseif type(atoms[1]) == "number" then
+        local target, time, easing, params = self:parse_line_args(atoms)
+        self:start_line_high(target, time, easing, params)
+    end
+end
+
+function ctgui_rslider:in_2_pos(atoms)
+    if self.list_mode then return end
+    if type(atoms) == "table" then
+        local target_pos, time, easing, params = self:parse_line_args(atoms)
+        local target_val = self:visual_to_value(target_pos)
+        self:start_line_high(target_val, time, easing, params)
+    elseif type(atoms) == "number" then
+        local target_val = self:visual_to_value(atoms)
+        self:start_line_high(target_val, self.default_line_ms)
+    end
+end
+
+function ctgui_rslider:in_2_float(f)
+    if self.list_mode then return end
+    if self.default_line_ms > 0 then
+        self:start_line_high(f, self.default_line_ms)
+    else
+        self:stop_line_high()
+        self.val_high = math.max(f, self.val_low)
+        self:update_visual_from_value()
+        self:throttled_repaint()
+        self:output_value()
+    end
+end
+
+function ctgui_rslider:in_2_set(f)
+    if self.list_mode then return end
+    self:stop_line_high()
+    self.val_high = math.max(f, self.val_low)
+    self:update_visual_from_value()
+    self:throttled_repaint()
+end
+
+-- Removed Inlet 3 and 4 handlers as they are no longer used in default mode
+function ctgui_rslider:in_3_list(atoms) end
+function ctgui_rslider:in_3_float(f) end
+function ctgui_rslider:in_4_list(atoms) end
+function ctgui_rslider:in_4_float(f) end
+
+-- Output
 
 function ctgui_rslider:output_value()
     if self.data_fps > 0 then
         self.pending_out_low = self.val_low
         self.pending_out_high = self.val_high
+        self.pending_vis_low = self.vis_low
+        self.pending_vis_high = self.vis_high
         self.pending_out_changed = true
-        
-        local ctrl_low = self.v_out_min + self.vis_low * (self.v_out_max - self.v_out_min)
-        local ctrl_high = self.v_out_min + self.vis_high * (self.v_out_max - self.v_out_min)
-        self.pending_ctrl_low = ctrl_low
-        self.pending_ctrl_high = ctrl_high
-        self.pending_ctrl_changed = true
         
         self:throttled_data_output()
     else
-        self:outlet(1, "list", {self.val_low, self.val_high})
-        local ctrl_low = self.v_out_min + self.vis_low * (self.v_out_max - self.v_out_min)
-        local ctrl_high = self.v_out_min + self.vis_high * (self.v_out_max - self.v_out_min)
-        self:outlet(2, "list", {ctrl_low, ctrl_high})
+        if self.list_mode then
+            self:outlet(1, "list", {"lo", self.val_low})
+            self:outlet(1, "list", {"hi", self.val_high})
+            self:outlet(1, "list", {"lopos", self.vis_low})
+            self:outlet(1, "list", {"hipos", self.vis_high})
+        else
+            self:outlet(1, "float", {self.val_low})
+            self:outlet(2, "float", {self.val_high})
+            if self.pos_output then
+                self:outlet(3, "list", {self.vis_low, self.vis_high})
+            end
+        end
     end
 end
 
@@ -599,52 +787,28 @@ function ctgui_rslider:throttled_data_output()
     end
     
     if self.pending_out_changed then
-        self:outlet(1, "list", {self.pending_out_low, self.pending_out_high})
+        if self.list_mode then
+            self:outlet(1, "list", {"lo", self.pending_out_low})
+            self:outlet(1, "list", {"hi", self.pending_out_high})
+            local vis_l = self.pending_vis_low or self:value_to_visual(self.pending_out_low)
+            local vis_h = self.pending_vis_high or self:value_to_visual(self.pending_out_high)
+            self:outlet(1, "list", {"lopos", vis_l})
+            self:outlet(1, "list", {"hipos", vis_h})
+        else
+            self:outlet(1, "float", {self.pending_out_low})
+            self:outlet(2, "float", {self.pending_out_high})
+            if self.pos_output then
+                local vis_l = self.pending_vis_low or self:value_to_visual(self.pending_out_low)
+                local vis_h = self.pending_vis_high or self:value_to_visual(self.pending_out_high)
+                self:outlet(3, "list", {vis_l, vis_h})
+            end
+        end
         self.pending_out_changed = false
-    end
-    
-    if self.pending_ctrl_changed then
-        self:outlet(2, "list", {self.pending_ctrl_low, self.pending_ctrl_high})
-        self.pending_ctrl_changed = false
     end
     
     self.data_clock_running = true
     self.data_clock:delay(1000 / self.data_fps)
 end
-
--- Dynamic Configuration
-
-function ctgui_rslider:in_1_guifps(atoms)
-    local f = type(atoms) == "table" and atoms[1] or atoms
-    if type(f) == "number" and f > 0 then
-        self.gui_fps = f
-    end
-end
-
-function ctgui_rslider:in_1_guishutter(atoms)
-    self:in_1_guifps(atoms)
-end
-
-function ctgui_rslider:in_1_fps(atoms)
-    self:in_1_guifps(atoms)
-end
-
-function ctgui_rslider:in_1_shutter(atoms)
-    self:in_1_guifps(atoms)
-end
-
-function ctgui_rslider:in_1_datafps(atoms)
-    local f = type(atoms) == "table" and atoms[1] or atoms
-    if type(f) == "number" then
-        self.data_fps = (f > 0) and f or 0
-    end
-end
-
-function ctgui_rslider:in_1_datashutter(atoms)
-    self:in_1_datafps(atoms)
-end
-
-
 
 function ctgui_rslider:data_tick()
     self.data_clock_running = false
@@ -675,7 +839,6 @@ function ctgui_rslider:repaint_tick()
 end
 
 function ctgui_rslider:paint(g)
-    -- Safety check
     if not self.c_bg then self.c_bg = {237, 237, 237} end
     if not self.c_slot then self.c_slot = {200, 200, 200} end
     if not self.c_handle then self.c_handle = {150, 150, 150} end
@@ -712,20 +875,15 @@ function ctgui_rslider:paint(g)
         end
     end
 
-        -- Handle (Range Bar)
+    -- Handle (Range Bar)
     local max_dim = (self.orientation == "vertical") and self.width or self.height
-    -- Reduce handler size slightly (80% of available space)
     local handle_size = self:get_handle_size()
-    
-    -- Bar thickness based on ratio 1:1.3 (Handler is 1.3x Bar)
     local bar_thickness = handle_size / 1.3
-    
     local radius = handle_size / 2
     
     local v_min = math.min(self.vis_low, self.vis_high)
     local v_max = math.max(self.vis_low, self.vis_high)
 
-    -- Darker color for the connecting bar
     local bar_r, bar_g, bar_b
     if self.c_handle.h then
         bar_r, bar_g, bar_b = Colors.hsb(self.c_handle.h, self.c_handle.s, self.c_handle.b * 0.7)
@@ -737,53 +895,65 @@ function ctgui_rslider:paint(g)
     
     if self.orientation == "vertical" then
         local track_len = self.height - handle_size
+        local y_low = (self.height - handle_size) - (v_min * track_len)
+        local y_high = (self.height - handle_size) - (v_max * track_len)
         
-        -- Positions (0 is bottom in visual logic, but height in pixels)
-        local y_low = (self.height - handle_size) - (v_min * track_len) -- Lower value -> Higher Y (bottom)
-        local y_high = (self.height - handle_size) - (v_max * track_len) -- Higher value -> Lower Y (top)
-        
-        -- Centering
         local center_x = self.width / 2
         local bar_x = center_x - (bar_thickness / 2)
         local handle_x = center_x - (handle_size / 2)
         
-        -- Draw Connecting Bar (Behind)
         g:set_color(bar_r, bar_g, bar_b)
         local bar_top = y_high + (handle_size / 2)
         local bar_bottom = y_low + (handle_size / 2)
         g:fill_rect(bar_x, bar_top, bar_thickness, bar_bottom - bar_top)
 
-        -- Draw Handlers
         g:set_color(self.c_handle[1], self.c_handle[2], self.c_handle[3])
         g:fill_rounded_rect(handle_x, y_low, handle_size, handle_size, radius)
         g:fill_rounded_rect(handle_x, y_high, handle_size, handle_size, radius)
     else
         local track_len = self.width - handle_size
-        
         local x_low = v_min * track_len
         local x_high = v_max * track_len
         
-        -- Centering
         local center_y = self.height / 2
         local bar_y = center_y - (bar_thickness / 2)
         local handle_y = center_y - (handle_size / 2)
         
-        -- Draw Connecting Bar (Behind)
         g:set_color(bar_r, bar_g, bar_b)
         local bar_left = x_low + (handle_size / 2)
         local bar_right = x_high + (handle_size / 2)
         g:fill_rect(bar_left, bar_y, bar_right - bar_left, bar_thickness)
 
-        -- Draw Handlers
         g:set_color(self.c_handle[1], self.c_handle[2], self.c_handle[3])
         g:fill_rounded_rect(x_low, handle_y, handle_size, handle_size, radius)
         g:fill_rounded_rect(x_high, handle_y, handle_size, handle_size, radius)
     end
 end
 
--- Override repaint in initialize
--- function ctgui_rslider:initialize(...)
---    ...
---    self._raw_repaint = self.repaint
---    self.repaint = self.throttled_repaint
--- end
+-- Dynamic Configuration
+function ctgui_rslider:in_1_guifps(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" and f > 0 then self.gui_fps = f end
+end
+function ctgui_rslider:in_1_guishutter(atoms) self:in_1_guifps(atoms) end
+function ctgui_rslider:in_1_fps(atoms) self:in_1_guifps(atoms) end
+function ctgui_rslider:in_1_shutter(atoms) self:in_1_guifps(atoms) end
+function ctgui_rslider:in_1_datafps(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" then self.data_fps = (f > 0) and f or 0 end
+end
+function ctgui_rslider:in_1_datashutter(atoms) self:in_1_datafps(atoms) end
+function ctgui_rslider:in_1_linems(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" then self.default_line_ms = math.max(0, f) end
+end
+function ctgui_rslider:in_1_linegrain(atoms)
+    local f = type(atoms) == "table" and atoms[1] or atoms
+    if type(f) == "number" then self.line_grain = math.max(1, f) end
+end
+function ctgui_rslider:in_1_reasing(atoms)
+    local v = type(atoms) == "table" and atoms[1] or atoms
+    if type(v) == "number" or type(v) == "string" then self.default_easing = v end
+end
+function ctgui_rslider:in_1_curve(atoms) self:in_1_reasing(atoms) end
+function ctgui_rslider:in_1_easing(atoms) self:in_1_reasing(atoms) end
