@@ -237,6 +237,13 @@ function ctgui_slider:initialize(sel, atoms)
         self.v_out_max = 127
     end
 
+    if parser:has_flag("ctin2") then
+        self.v_in_min = 0
+        self.v_in_max = 255
+        self.v_out_min = 0
+        self.v_out_max = 255
+    end
+
     if parser:has_flag("bendin") then
         self.v_in_min = 0
         self.v_in_max = 16383
@@ -318,6 +325,11 @@ end
 
 function ctgui_slider:postinitialize()
     self:set_size(self.width, self.height)
+end
+
+function ctgui_slider:normalize_input(f)
+    local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
+    return math.max(0, math.min(1, norm))
 end
 
 -- Transfer Functions
@@ -688,7 +700,8 @@ function ctgui_slider:in_1_list(atoms)
         if type(atoms[2]) == "number" then
             local args = {unpack(atoms, 2)}
             local target_pos, time, easing, params = self:parse_line_args(args)
-            local target_val = self:visual_to_value(target_pos)
+            local norm_pos = self:normalize_input(target_pos)
+            local target_val = self:visual_to_value(norm_pos)
             self:start_line(target_val, time, easing, params)
         end
         return
@@ -709,11 +722,15 @@ end
 
 function ctgui_slider:in_1_pos(atoms)
     if type(atoms) == "table" then
+        if #atoms == 0 then return end
         local target_pos, time, easing, params = self:parse_line_args(atoms)
-        local target_val = self:visual_to_value(target_pos)
+        if type(target_pos) ~= "number" then return end
+        local norm_pos = self:normalize_input(target_pos)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line(target_val, time, easing, params)
     elseif type(atoms) == "number" then
-        local target_val = self:visual_to_value(atoms)
+        local norm_pos = self:normalize_input(atoms)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line(target_val, self.default_line_ms)
     end
 end
@@ -751,8 +768,7 @@ function ctgui_slider:in_2_list(atoms)
     if not self.pos_mode then return end
     if type(atoms) == "table" and #atoms > 0 and type(atoms[1]) == "number" then
         local f = atoms[1]
-        local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
-        norm = math.max(0, math.min(1, norm))
+        local norm = self:normalize_input(f)
         local target = self:visual_to_value(norm)
         
         local time = (type(atoms[2]) == "number") and atoms[2] or self.default_line_ms
@@ -772,8 +788,7 @@ end
 function ctgui_slider:in_2_float(f)
     if not self.pos_mode then return end
     if self.default_line_ms and self.default_line_ms > 0 then
-        local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
-        norm = math.max(0, math.min(1, norm))
+        local norm = self:normalize_input(f)
         local target = self:visual_to_value(norm)
         self:start_line(target, self.default_line_ms)
         return
@@ -781,8 +796,7 @@ function ctgui_slider:in_2_float(f)
 
     self:stop_line()
     -- Map input range to 0-1
-    local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
-    norm = math.max(0, math.min(1, norm))
+    local norm = self:normalize_input(f)
     
     self.visual_pos = norm
     self.current_value = self:visual_to_value(norm)
