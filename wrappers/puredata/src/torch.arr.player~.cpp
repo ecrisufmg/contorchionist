@@ -210,7 +210,14 @@ static t_int *torch_arr_player_perform(t_int *w) {
     }
 
     double phase = x->x_current_phase;
-    double rate = x->x_rate;
+    
+    // Resampling compensation
+    double resample_factor = 1.0;
+    if (x->x_sys_sr > 0 && x->x_file_sr > 0) {
+        resample_factor = x->x_file_sr / x->x_sys_sr;
+    }
+    double rate = x->x_rate * resample_factor;
+
     double fade_phase = x->x_fade_phase;
     double fade_inc = x->x_fade_inc;
     int fade_state = x->x_fade_state;
