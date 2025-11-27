@@ -201,6 +201,10 @@ function ctgui_rslider:initialize(sel, atoms)
         self.v_in_min = 0; self.v_in_max = 127
         self.v_out_min = 0; self.v_out_max = 127
     end
+    if parser:has_flag("ctin2") then
+        self.v_in_min = 0; self.v_in_max = 255
+        self.v_out_min = 0; self.v_out_max = 255
+    end
     if parser:has_flag("bendin") then
         self.v_in_min = 0; self.v_in_max = 16383
         self.v_out_min = 0; self.v_out_max = 16383
@@ -267,6 +271,11 @@ end
 
 function ctgui_rslider:postinitialize()
     self:set_size(self.width, self.height)
+end
+
+function ctgui_rslider:normalize_input(f)
+    local norm = (f - self.v_in_min) / (self.v_in_max - self.v_in_min)
+    return math.max(0, math.min(1, norm))
 end
 
 -- Transfer Functions
@@ -733,11 +742,15 @@ function ctgui_rslider:in_1_high(atoms) self:in_1_hi(atoms) end
 
 function ctgui_rslider:in_1_lopos(atoms)
     if type(atoms) == "table" then
+        if #atoms == 0 then return end
         local target_pos, time, easing, params = self:parse_line_args(atoms)
-        local target_val = self:visual_to_value(target_pos)
+        if type(target_pos) ~= "number" then return end
+        local norm_pos = self:normalize_input(target_pos)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line_low(target_val, time, easing, params)
     elseif type(atoms) == "number" then
-        local target_val = self:visual_to_value(atoms)
+        local norm_pos = self:normalize_input(atoms)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line_low(target_val, self.default_line_ms)
     end
 end
@@ -745,11 +758,15 @@ function ctgui_rslider:in_1_lowpos(atoms) self:in_1_lopos(atoms) end
 
 function ctgui_rslider:in_1_hipos(atoms)
     if type(atoms) == "table" then
+        if #atoms == 0 then return end
         local target_pos, time, easing, params = self:parse_line_args(atoms)
-        local target_val = self:visual_to_value(target_pos)
+        if type(target_pos) ~= "number" then return end
+        local norm_pos = self:normalize_input(target_pos)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line_high(target_val, time, easing, params)
     elseif type(atoms) == "number" then
-        local target_val = self:visual_to_value(atoms)
+        local norm_pos = self:normalize_input(atoms)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line_high(target_val, self.default_line_ms)
     end
 end
@@ -777,7 +794,8 @@ function ctgui_rslider:in_1_list(atoms)
         if type(atoms[2]) == "number" then
             local args = {unpack(atoms, 2)}
             local target_pos, time, easing, params = self:parse_line_args(args)
-            local target_val = self:visual_to_value(target_pos)
+            local norm_pos = self:normalize_input(target_pos)
+            local target_val = self:visual_to_value(norm_pos)
             self:start_line_low(target_val, time, easing, params)
         end
         return
@@ -785,7 +803,8 @@ function ctgui_rslider:in_1_list(atoms)
         if type(atoms[2]) == "number" then
             local args = {unpack(atoms, 2)}
             local target_pos, time, easing, params = self:parse_line_args(args)
-            local target_val = self:visual_to_value(target_pos)
+            local norm_pos = self:normalize_input(target_pos)
+            local target_val = self:visual_to_value(norm_pos)
             self:start_line_high(target_val, time, easing, params)
         end
         return
@@ -797,7 +816,8 @@ function ctgui_rslider:in_1_list(atoms)
             if type(atoms[2]) == "number" then
                 local args = {unpack(atoms, 2)}
                 local target_pos, time, easing, params = self:parse_line_args(args)
-                local target_val = self:visual_to_value(target_pos)
+                local norm_pos = self:normalize_input(target_pos)
+                local target_val = self:visual_to_value(norm_pos)
                 self:start_line_low(target_val, time, easing, params)
             end
         elseif type(sel) == "number" then
@@ -810,11 +830,15 @@ end
 function ctgui_rslider:in_1_pos(atoms)
     if self.route_mode then return end
     if type(atoms) == "table" then
+        if #atoms == 0 then return end
         local target_pos, time, easing, params = self:parse_line_args(atoms)
-        local target_val = self:visual_to_value(target_pos)
+        if type(target_pos) ~= "number" then return end
+        local norm_pos = self:normalize_input(target_pos)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line_low(target_val, time, easing, params)
     elseif type(atoms) == "number" then
-        local target_val = self:visual_to_value(atoms)
+        local norm_pos = self:normalize_input(atoms)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line_low(target_val, self.default_line_ms)
     end
 end
@@ -847,7 +871,8 @@ function ctgui_rslider:in_2_list(atoms)
         if type(atoms[2]) == "number" then
             local args = {unpack(atoms, 2)}
             local target_pos, time, easing, params = self:parse_line_args(args)
-            local target_val = self:visual_to_value(target_pos)
+            local norm_pos = self:normalize_input(target_pos)
+            local target_val = self:visual_to_value(norm_pos)
             self:start_line_high(target_val, time, easing, params)
         end
     elseif type(atoms[1]) == "number" then
@@ -859,11 +884,15 @@ end
 function ctgui_rslider:in_2_pos(atoms)
     if self.route_mode then return end
     if type(atoms) == "table" then
+        if #atoms == 0 then return end
         local target_pos, time, easing, params = self:parse_line_args(atoms)
-        local target_val = self:visual_to_value(target_pos)
+        if type(target_pos) ~= "number" then return end
+        local norm_pos = self:normalize_input(target_pos)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line_high(target_val, time, easing, params)
     elseif type(atoms) == "number" then
-        local target_val = self:visual_to_value(atoms)
+        local norm_pos = self:normalize_input(atoms)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line_high(target_val, self.default_line_ms)
     end
 end
@@ -892,7 +921,8 @@ end
 -- Inlet 3: Low Position (if @pos)
 function ctgui_rslider:in_3_float(f)
     if self.route_mode or not self.pos_mode then return end
-    local target_val = self:visual_to_value(f)
+    local norm_pos = self:normalize_input(f)
+    local target_val = self:visual_to_value(norm_pos)
     if self.default_line_ms > 0 then
         self:start_line_low(target_val, self.default_line_ms)
     else
@@ -908,7 +938,8 @@ function ctgui_rslider:in_3_list(atoms)
     if self.route_mode or not self.pos_mode then return end
     if type(atoms[1]) == "number" then
         local target_pos, time, easing, params = self:parse_line_args(atoms)
-        local target_val = self:visual_to_value(target_pos)
+        local norm_pos = self:normalize_input(target_pos)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line_low(target_val, time, easing, params)
     end
 end
@@ -916,7 +947,8 @@ end
 function ctgui_rslider:in_3_set(f)
     if self.route_mode or not self.pos_mode then return end
     self:stop_line_low()
-    local target_val = self:visual_to_value(f)
+    local norm_pos = self:normalize_input(f)
+    local target_val = self:visual_to_value(norm_pos)
     self.val_low = math.min(target_val, self.val_high)
     self:update_visual_from_value()
     self:throttled_repaint()
@@ -925,7 +957,8 @@ end
 -- Inlet 4: High Position (if @pos)
 function ctgui_rslider:in_4_float(f)
     if self.route_mode or not self.pos_mode then return end
-    local target_val = self:visual_to_value(f)
+    local norm_pos = self:normalize_input(f)
+    local target_val = self:visual_to_value(norm_pos)
     if self.default_line_ms > 0 then
         self:start_line_high(target_val, self.default_line_ms)
     else
@@ -941,7 +974,8 @@ function ctgui_rslider:in_4_list(atoms)
     if self.route_mode or not self.pos_mode then return end
     if type(atoms[1]) == "number" then
         local target_pos, time, easing, params = self:parse_line_args(atoms)
-        local target_val = self:visual_to_value(target_pos)
+        local norm_pos = self:normalize_input(target_pos)
+        local target_val = self:visual_to_value(norm_pos)
         self:start_line_high(target_val, time, easing, params)
     end
 end
@@ -949,7 +983,8 @@ end
 function ctgui_rslider:in_4_set(f)
     if self.route_mode or not self.pos_mode then return end
     self:stop_line_high()
-    local target_val = self:visual_to_value(f)
+    local norm_pos = self:normalize_input(f)
+    local target_val = self:visual_to_value(norm_pos)
     self.val_high = math.max(target_val, self.val_low)
     self:update_visual_from_value()
     self:throttled_repaint()
