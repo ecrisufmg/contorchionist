@@ -229,6 +229,9 @@ function ctgui_rslider:initialize(sel, atoms)
     -- Initial visual pos
     self:update_visual_from_value()
 
+    -- Double click state
+    self.last_click_time = 0
+
     -- Override repaint for throttling
     self._raw_repaint = self.repaint
     self.repaint = self.throttled_repaint
@@ -432,6 +435,27 @@ function ctgui_rslider:mouse_down(x, y, button, mod)
                 self.drag_target = "high"
             end
         end
+
+        -- Double click check
+        local now = os.clock()
+        if (now - self.last_click_time) < 0.25 then
+            if self.drag_target == "high" then
+                local target = self.max_val
+                if self.mode == "db" then target = 0 end
+                self:start_line_high(target, 20)
+                self.last_click_time = 0
+                self.dragging = false
+                return true
+            elseif self.drag_target == "low" then
+                local target = self.min_val
+                self:start_line_low(target, 20)
+                self.last_click_time = 0
+                self.dragging = false
+                return true
+            end
+        end
+        self.last_click_time = now
+
         self:set_value_from_mouse(x, y)
     end
     return true

@@ -276,6 +276,9 @@ function ctgui_slider:initialize(sel, atoms)
     self.handle_size = 10
     self:update_visual_from_value()
 
+    -- Double click state
+    self.last_click_time = 0
+
     -- Override repaint for throttling
     self._raw_repaint = self.repaint
     self.repaint = self.throttled_repaint
@@ -446,6 +449,19 @@ function ctgui_slider:set_value_from_mouse(x, y)
 end
 
 function ctgui_slider:mouse_down(x, y, button, mod)
+    local now = os.clock()
+    if (now - self.last_click_time) < 0.25 then
+        -- Double click
+        local target = self.max_val
+        if self.mode == "db" then
+            target = 0
+        end
+        self:start_line(target, 20)
+        self.last_click_time = 0
+        return true
+    end
+    self.last_click_time = now
+
     self:stop_line()
     self.dragging = true
     self:set_value_from_mouse(x, y)
