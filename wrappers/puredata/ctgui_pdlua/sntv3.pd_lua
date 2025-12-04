@@ -10,10 +10,10 @@ function sntv3:initialize(sel, atoms)
 
     -- Defaults
     self.ranges = {
-        S = {min = parser:get_float("Smin", 60), max = parser:get_float("Smax", 84)},
-        A = {min = parser:get_float("Amin", 53), max = parser:get_float("Amax", 77)},
-        T = {min = parser:get_float("Tmin", 48), max = parser:get_float("Tmax", 72)},
-        B = {min = parser:get_float("Bmin", 40), max = parser:get_float("Bmax", 64)},
+        S = {min = parser:get_float("Smin", 60), max = parser:get_float("Smax", 79)},
+        A = {min = parser:get_float("Amin", 53), max = parser:get_float("Amax", 72)},
+        T = {min = parser:get_float("Tmin", 48), max = parser:get_float("Tmax", 69)},
+        B = {min = parser:get_float("Bmin", 40), max = parser:get_float("Bmax", 60)},
     }
 
     self.counts = {
@@ -23,7 +23,7 @@ function sntv3:initialize(sel, atoms)
         B = parser:get_float("Bnum", 2),
     }    
 
-    self.min_db = parser:get_float("mindb", -144)
+    self.min_db = parser:get_float("mindb", -70)
 
     -- Delay parameters
     self.dephase = 0
@@ -41,6 +41,11 @@ function sntv3:initialize(sel, atoms)
     pd.post("A: ".. self.counts.A .. "x | range: [" .. self.ranges.A.min .. "-" .. self.ranges.A.max .. "]")
     pd.post("T: ".. self.counts.T .. "x | range: [" .. self.ranges.T.min .. "-" .. self.ranges.T.max .. "]")
     pd.post("B: ".. self.counts.B .. "x | range: [" .. self.ranges.B.min .. "-" .. self.ranges.B.max .. "]")
+
+    pd.post("Min dB threshold: " .. self.min_db)
+    pd.post("Max Duration: " .. self.max_duration .. " s")
+    pd.post("Min Duration: " .. self.min_duration .. " s")
+    pd.post("Cooldown Time: " .. self.cooldown_time .. " s")
 
     -- Initialize voices
     self.voices = {}
