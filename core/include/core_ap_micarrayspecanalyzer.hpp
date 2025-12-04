@@ -15,7 +15,19 @@ struct AnalysisResult {
     int band_index;
     float angle_deg;
     float strength;
+    float overall_level;
     float dominant_freq_hz;
+};
+
+enum class StrengthMode {
+    MAGNITUDE,
+    POWER
+};
+
+enum class LevelMode {
+    MAGNITUDE,
+    POWER,
+    DB
 };
 
 struct BandConfig {
@@ -49,6 +61,8 @@ private:
     // DSP Parameters
     float sample_rate_;
     float overlap_factor_;
+    StrengthMode strength_mode_;
+    LevelMode level_mode_;
 
     // Helper: Normalize angle to 0-360
     float normalize_angle(float angle) {
@@ -79,7 +93,8 @@ private:
 public:
     MicArraySpecAnalyzer(int num_mics, int fft_size, torch::Device device = torch::kCPU)
         : num_mics_(num_mics), fft_size_(fft_size), device_(device),
-          sample_rate_(48000.0f), overlap_factor_(1.0f) {
+          sample_rate_(48000.0f), overlap_factor_(1.0f),
+          strength_mode_(StrengthMode::POWER), level_mode_(LevelMode::MAGNITUDE) {
         
         num_bins_ = fft_size_ / 2 + 1;
         mics_.resize(num_mics_);
@@ -101,6 +116,9 @@ public:
         }
     }
     void set_overlap_factor(float of) { overlap_factor_ = of; }
+
+    void set_strength_mode(StrengthMode mode) { strength_mode_ = mode; }
+    void set_level_mode(LevelMode mode) { level_mode_ = mode; }
 
     void resize(int fft_size) {
         if (fft_size_ != fft_size) {
@@ -272,11 +290,30 @@ public:
             auto weighted_sq = mag_sq * mask; 
             auto sum_sq = weighted_sq.sum(1); // [num_mics]
             
-            // Normalize by mask sum (effective bandwidth in bins)
-            float mask_sum = mask.sum().item<float>();
-            if (mask_sum < 0.0001f) mask_sum = 1.0f;
+            // Overall Level Calculation
+            // Average Power across mics
+            float avg_power = sum_sq.mean().item<float>();
+            float overall_level = 0.0f;
             
-            auto rms_vec = torch::sqrt(sum_sq / mask_sum); // [num_mics]
+            switch (level_mode_) {
+                case LevelMode::POWER:
+                    overall_level = avg_power;
+                    break;
+                case LevelMode::MAGNITUDE:
+                    overall_level = std::sqrt(avg_power);
+                    break;
+                case LevelMode::DB:
+                    overall_level = 10.0f * std::log10(avg_power + 1e-9f);
+                    break;
+            }
+            
+            // We calculate the Euclidean Norm (Root Sum Squares) of the band.
+            // We do NOT divide by mask_sum (bandwidth) because we want the Total Strength 
+            // of the signal in that band, not the Average Spectral Density.
+            // Dividing by bandwidth would cause a pure tone to report lower strength 
+            // as the analysis band gets wider, which is counter-intuitive.
+            
+            auto rms_vec = torch::sqrt(sum_sq); // [num_mics]
             
             // 2. Projection
             // rms_vec: [num_mics]
@@ -288,7 +325,15 @@ public:
             float y = proj[1].item<float>();
             
             // 3. Polar Conversion
-            float strength = std::sqrt(x*x + y*y);
+            float strength_mag = std::sqrt(x*x + y*y);
+            float strength = 0.0f;
+            
+            if (strength_mode_ == StrengthMode::POWER) {
+                strength = strength_mag * strength_mag;
+            } else {
+                strength = strength_mag;
+            }
+
             float angle_rad = std::atan2(x, y); // atan2(x, y) gives angle from Y axis (North) if x=sin, y=cos
             float angle_deg = angle_rad * 180.0f / M_PI;
             angle_deg = normalize_angle(angle_deg);
@@ -323,7 +368,7 @@ public:
                 freq_hz = float(peak_bin) * sample_rate_ / fft_size_;
             }
             
-            results.push_back({b, angle_deg, strength, freq_hz});
+            results.push_back({b, angle_deg, strength, overall_level, freq_hz});
         }
         
         return results;
