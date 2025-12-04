@@ -39,13 +39,14 @@ static t_class *torch_mic_array_spectral_analyzer_tilde_class = nullptr;
 static void torch_mic_array_spectral_analyzer_tilde_tick(t_torch_mic_array_spectral_analyzer_tilde *x) {
     if (x->results_ready_) {
         for (const auto& res : x->results_buffer_) {
-            t_atom argv[4];
+            t_atom argv[5];
             SETFLOAT(argv+0, static_cast<t_float>(res.band_index));
             SETFLOAT(argv+1, static_cast<t_float>(res.angle_deg));
             SETFLOAT(argv+2, static_cast<t_float>(res.strength));
-            SETFLOAT(argv+3, static_cast<t_float>(res.dominant_freq_hz));
+            SETFLOAT(argv+3, static_cast<t_float>(res.overall_level));
+            SETFLOAT(argv+4, static_cast<t_float>(res.dominant_freq_hz));
             
-            outlet_list(x->out_control_, &s_list, 4, argv);
+            outlet_list(x->out_control_, &s_list, 5, argv);
         }
         x->results_ready_ = false;
     }
@@ -206,6 +207,32 @@ static void torch_mic_array_spectral_analyzer_tilde_overlap(t_torch_mic_array_sp
     }
 }
 
+static void torch_mic_array_spectral_analyzer_tilde_strength_mode(t_torch_mic_array_spectral_analyzer_tilde *x, t_symbol *s) {
+    if (!x->analyzer_) return;
+    std::string mode = s->s_name;
+    if (mode == "mag" || mode == "magnitude") {
+        x->analyzer_->set_strength_mode(contorchionist::core::ap_micarrayspecanalyzer::StrengthMode::MAGNITUDE);
+    } else if (mode == "pow" || mode == "power") {
+        x->analyzer_->set_strength_mode(contorchionist::core::ap_micarrayspecanalyzer::StrengthMode::POWER);
+    } else {
+        pd_error(x, "torch.mic_array_spectral_analyzer~: Invalid strength mode '%s'. Use 'mag' or 'pow'.", mode.c_str());
+    }
+}
+
+static void torch_mic_array_spectral_analyzer_tilde_level_mode(t_torch_mic_array_spectral_analyzer_tilde *x, t_symbol *s) {
+    if (!x->analyzer_) return;
+    std::string mode = s->s_name;
+    if (mode == "mag" || mode == "magnitude") {
+        x->analyzer_->set_level_mode(contorchionist::core::ap_micarrayspecanalyzer::LevelMode::MAGNITUDE);
+    } else if (mode == "pow" || mode == "power") {
+        x->analyzer_->set_level_mode(contorchionist::core::ap_micarrayspecanalyzer::LevelMode::POWER);
+    } else if (mode == "db") {
+        x->analyzer_->set_level_mode(contorchionist::core::ap_micarrayspecanalyzer::LevelMode::DB);
+    } else {
+        pd_error(x, "torch.mic_array_spectral_analyzer~: Invalid level mode '%s'. Use 'mag', 'pow', or 'db'.", mode.c_str());
+    }
+}
+
 static void *torch_mic_array_spectral_analyzer_tilde_new(t_symbol *s, int argc, t_atom *argv) {
     auto *x = reinterpret_cast<t_torch_mic_array_spectral_analyzer_tilde *>(pd_new(torch_mic_array_spectral_analyzer_tilde_class));
     if (!x) return nullptr;
@@ -228,6 +255,26 @@ static void *torch_mic_array_spectral_analyzer_tilde_new(t_symbol *s, int argc, 
     
     x->analyzer_ = std::make_unique<Analyzer>(x->num_mics_, fft_size, x->device_);
     
+    // Strength Mode
+    if (parser.has_flag("mag")) {
+        x->analyzer_->set_strength_mode(contorchionist::core::ap_micarrayspecanalyzer::StrengthMode::MAGNITUDE);
+    } else if (parser.has_flag("pow")) {
+        x->analyzer_->set_strength_mode(contorchionist::core::ap_micarrayspecanalyzer::StrengthMode::POWER);
+    } else {
+        // Default to POWER as requested
+        x->analyzer_->set_strength_mode(contorchionist::core::ap_micarrayspecanalyzer::StrengthMode::POWER);
+    }
+
+    // Level Mode
+    std::string level_str = parser.get_string("level l", "");
+    if (level_str.empty()) level_str = parser.get_string("rms", ""); // Alias
+    
+    if (!level_str.empty()) {
+        if (level_str == "mag") x->analyzer_->set_level_mode(contorchionist::core::ap_micarrayspecanalyzer::LevelMode::MAGNITUDE);
+        else if (level_str == "pow") x->analyzer_->set_level_mode(contorchionist::core::ap_micarrayspecanalyzer::LevelMode::POWER);
+        else if (level_str == "db") x->analyzer_->set_level_mode(contorchionist::core::ap_micarrayspecanalyzer::LevelMode::DB);
+    }
+
     // Default Geometry (Inverted Star) if num_mics == 4
     if (x->num_mics_ == 4) {
         // Mic 0: Angle -135°, Dist 0.2m
@@ -343,4 +390,12 @@ extern "C" void setup_torch0x2emic_array_spectral_analyzer_tilde(void) {
     class_addmethod(torch_mic_array_spectral_analyzer_tilde_class,
         reinterpret_cast<t_method>(torch_mic_array_spectral_analyzer_tilde_overlap),
         gensym("of"), A_FLOAT, 0);
+
+    class_addmethod(torch_mic_array_spectral_analyzer_tilde_class,
+        reinterpret_cast<t_method>(torch_mic_array_spectral_analyzer_tilde_strength_mode),
+        gensym("strength_mode"), A_DEFSYMBOL, 0);
+
+    class_addmethod(torch_mic_array_spectral_analyzer_tilde_class,
+        reinterpret_cast<t_method>(torch_mic_array_spectral_analyzer_tilde_level_mode),
+        gensym("level_mode"), A_DEFSYMBOL, 0);
 }
