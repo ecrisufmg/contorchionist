@@ -27,18 +27,18 @@ The system defines the microphone array as a "Vector Cloud" relative to a centro
 4.  **Speaker Registry** (`std::vector<float>`): A list of physical angles of the loudspeakers.
 
 ### B. Geometry & Calibration
-The system distinguishes between **Physical Geometry** and **Analysis Geometry**.
+The system distinguishes between **Physical Geometry** (for visualization/setup) and **Analysis Weights**.
 
-1.  **Input:** User provides `Mic_Index`, `Physical_Angle` (where the capsule points), and `Distance` (meters from center).
-2.  **Distance Normalization:**
-    *   Find $R_{max}$ (furthest mic).
-    *   Calculate Weight $W_i = (r_i / R_{max})$. *(Ensures all mics contribute proportionally to the vector sum, regardless of proximity).*
+1.  **Input:** User provides `Mic_Index`, `Physical_Angle` (degrees), and `Distance` (meters).
+2.  **Distance Usage:**
+    *   Store Distance primarily for visualization or future Time-of-Arrival extensions.
+    *   **Gain Normalization Logic:** By default, set the geometric weight ($W_i$) to 1.0 for all microphones.
+    *   *Reasoning:* In a Vector Intensity approach, the magnitude of the vector should be driven purely by the incoming signal's RMS amplitude. Artificially scaling based on physical distance would bias the triangulation direction incorrectly.
 3.  **Null-Point Steering (Auto-Calibration):**
-    *   For Cardioid mics, the "Blind Spot" is at $180^\circ$ (the tail).
-    *   **Logic:** For each mic, find the angularly nearest Loudspeaker from the `Speaker Registry`.
-    *   **Adjustment:** Physically, the user points the tail at the speaker. Mathematically, the software considers the "Pickup Direction" as the capsule direction.
-    *   **Formula:** If the user points the tail at a speaker, the `Physical_Angle` (capsule) is naturally opposite.
-    *   *Constraint:* The software uses the `Physical_Angle` for the Vector Math ($X/Y$ projection).
+    *   **Logic:** Match mic tails to nearest speakers to determine the `Pickup_Angle`.
+    *   **Pre-Calculation:** Update the `projection_mat` tensor:
+        *   **Column 0 ($X$):** $1.0 \cdot \sin(Pickup\_Angle)$
+        *   **Column 1 ($Y$):** $1.0 \cdot \cos(Pickup\_Angle)$
 
 ---
 
@@ -97,21 +97,23 @@ Please check wrappers/puredata/utils/include to see how to deal with named argum
 ### A. Inlet/Outlet Architecture
 *   **Dynamic Inlets:**
     *   The object must spawn `num_mics` signal inlets for **Magnitude**.
-    *   (Optionally `num_mics` for Phase, though the Core analysis above relies primarily on RMS/Magnitude).
+    *   **No Phase Inlets:** Phase information is not used in this implementation.
 *   **Outlets:**
-    *   first outlet: lists of `[band_index (0-based), angle (deg), strength, freq (Hz)]` for each analysis band.
+    *   **Control Outlet:** A single outlet (rightmost) that outputs a list for each analyzed band per block.
+    *   **Format:** `list <band_index> <angle_deg> <strength> <dominant_freq_hz>`
 
 ### B. Message/attribute Handlers (if attribute, using @/- syntax when instantiating the object)
 *   `mic <id> <angle> <dist>`: Calls `core->set_mic_geometry`.
 *   `speaker <angle>`: Calls `core->register_speaker`.
-*   `band <low_hz> <high_hz>`: Sets the analysis range.
+*   `@bands <min1> <max1> <min2> <max2> ...`: Sets multiple analysis bands. Must have an even number of floats.
+*   `@overlap <factor>` (or `@of`): Sets the overlap factor for normalization (since external RFFT doesn't normalize).
 
 as message, also accept this:
 *   `calibrate`: Triggers `update_projection_matrix`.
 
 ### C. The Perform Routine (`DSP Loop`)
 1.  Gather input pointers ($N$ arrays).
-2.  Pass pointers to `Core::process_band`.
-3.  Write resulting `Angle`, `Strength`, `Freq` to the output signal vectors.
-    *(Since FFT happens in blocks, the output signal will be "stepped" (constant for the duration of the FFT hop). Use Pd's internal `line~` logic or simply output the step if acceptable).*
+2.  Pass pointers to `Core::process_bands` (iterating over all configured bands).
+3.  **Output:** For each band, output a control list via the outlet.
+    *   Use `clock_delay` or similar mechanism to output from the DSP thread safely.
 
