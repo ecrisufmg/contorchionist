@@ -54,10 +54,50 @@ function CorpusMatcher:in_4_float(f)
     self.smoothing = math.max(0, math.min(1, f))
 end
 
-function CorpusMatcher:in_1_read(filename)
+function CorpusMatcher:in_1_read(...)
+    local args = {...}
+    local filename
+    
+    if #args == 0 then
+        pd.post("CorpusMatcher: read requires a filename")
+        return
+    end
+    
+    if type(args[1]) == "table" then
+        -- Handle table input (e.g. from ArgParser)
+        local parts = {}
+        for _, v in ipairs(args[1]) do
+            table.insert(parts, tostring(v))
+        end
+        filename = table.concat(parts, " ")
+    else
+        -- Handle multiple arguments (e.g. read my file.json)
+        local parts = {}
+        for _, v in ipairs(args) do
+            table.insert(parts, tostring(v))
+        end
+        filename = table.concat(parts, " ")
+    end
+
+    -- Try to open directly (absolute path or relative to CWD)
     local f = io.open(filename, "r")
+    
+    -- If failed, try relative to the patch canvas directory
+    if not f and self._canvaspath then
+        local canvas_path = self._canvaspath .. filename
+        f = io.open(canvas_path, "r")
+        if f then
+            pd.post("CorpusMatcher: Found file relative to canvas: " .. canvas_path)
+        end
+    end
+
     if not f then
+        local pwd = os.getenv("PWD") or io.popen("pwd"):read()
         pd.post("corpus.matcher: Could not open file " .. filename)
+        if self._canvaspath then
+             pd.post("corpus.matcher: Also tried: " .. self._canvaspath .. filename)
+        end
+        pd.post("corpus.matcher: Current working directory: " .. (pwd or "unknown"))
         return
     end
     local content = f:read("*all")
@@ -131,7 +171,6 @@ function CorpusMatcher:in_1_list(atoms)
     if level_db < self.threshold_db then return end
     
     -- 2. Rate Limiting
-    local now = pd.sys_time() -- Returns time in seconds? No, usually not available in standard pd-lua.
     -- pd-lua doesn't have a built-in high-res timer easily accessible without external libs or clock objects.
     -- However, we can use os.clock() which is usually available.
     local now_ms = os.clock() * 1000
