@@ -261,7 +261,7 @@ end
 
 
 local function parse_number(str, i)
-  local x = next_char(str, i, delim_chars, true)
+  local x = next_char(str, i, delim_chars)
   local s = str:sub(i, x - 1)
   local n = tonumber(s)
   if not n then
@@ -272,7 +272,7 @@ end
 
 
 local function parse_literal(str, i)
-  local x = next_char(str, i, delim_chars, true)
+  local x = next_char(str, i, delim_chars)
   local word = str:sub(i, x - 1)
   if not literals[word] then
     decode_error(str, i, "invalid literal '" .. word .. "'")

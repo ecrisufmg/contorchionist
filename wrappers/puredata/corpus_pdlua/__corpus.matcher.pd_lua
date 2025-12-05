@@ -4,7 +4,7 @@
 local json = require("json")
 local ArgParser = require("pd_arg_parser")
 
-local CorpusMatcher = pd.Class:new():register("corpus.matcher")
+local CorpusMatcher = pd.Class:new():register("corpus.matcherold")
 
 function CorpusMatcher:initialize(sel, atoms)
     self.inlets = 4
