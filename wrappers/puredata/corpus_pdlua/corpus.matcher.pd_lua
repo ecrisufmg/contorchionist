@@ -2,7 +2,7 @@
 -- Matches spectral analysis data to a corpus of audio segments.
 
 local json = require("json")
-local ArgParser = require("corpus_arg_parser")
+local ArgParser = require("pd_arg_parser")
 
 local CorpusMatcher = pd.Class:new():register("corpus.matcher")
 
@@ -24,16 +24,16 @@ function CorpusMatcher:initialize(sel, atoms)
     local parser = ArgParser:new(atoms)
     
     -- Update parameters from flags
-    self.threshold_db = tonumber(parser:get("thresh")) or self.threshold_db
-    self.rate_hz = tonumber(parser:get("rate")) or self.rate_hz
-    self.smoothing = tonumber(parser:get("smooth")) or self.smoothing
+    self.threshold_db = tonumber(parser:get_value("thresh")) or self.threshold_db
+    self.rate_hz = tonumber(parser:get_value("rate")) or self.rate_hz
+    self.smoothing = tonumber(parser:get_value("smooth")) or self.smoothing
     
     -- Azimuth smoothing state (Unit vector components)
     self.az_x = 0
     self.az_y = 0
 
     -- Load corpus automatically if possible
-    local file_path = parser:get("file")
+    local file_path = parser:get_value("file")
     if file_path then
         self:in_1_read(file_path)
     end
