@@ -261,9 +261,11 @@ public:
         auto mag = magnitude_input.to(device_);
         
         // Normalize by overlap factor if needed (usually RFFT is unnormalized)
-        if (overlap_factor_ > 1.0f) {
-            mag = mag / overlap_factor_;
-        }
+        // PAD: Removed overlap normalization as it attenuates the signal for analysis.
+        // The input is expected to be the magnitude of the windowed frame.
+        // if (overlap_factor_ > 1.0f) {
+        //     mag = mag / overlap_factor_;
+        // }
 
         // 1. Apply Masks
         // We want to compute RMS for each band for each mic.
