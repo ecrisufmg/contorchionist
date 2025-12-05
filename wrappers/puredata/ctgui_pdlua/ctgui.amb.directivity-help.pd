@@ -1,0 +1,15 @@
+#N canvas 100 100 600 400 12;
+#X obj 50 200 ctgui.amb.directivity;
+#X msg 50 100 mode 0;
+#X msg 110 100 mode 1;
+#X msg 170 100 mode 2;
+#X msg 230 100 clear;
+#X text 50 50 Visualization for torch.mic_array_spectral_analyzer~;
+#X text 50 70 Input: list <band> <angle> <strength> <level> <freq>;
+#X msg 50 150 0 45 0.8 0.5 1000;
+#X text 200 150 Simulate input;
+#X connect 1 0 0 0;
+#X connect 2 0 0 0;
+#X connect 3 0 0 0;
+#X connect 4 0 0 0;
+#X connect 7 0 0 0;
