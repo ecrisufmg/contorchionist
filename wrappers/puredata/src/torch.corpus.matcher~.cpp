@@ -6,6 +6,7 @@
 #include <sstream>
 #include <algorithm>
 #include <iostream>
+#include <map>
 
 // Minimal JSON Parser for the specific format
 // [ {"key": val, ...}, ... ]
@@ -72,6 +73,55 @@ private:
         return seg;
     }
 
+    static std::string unescape(const std::string& str) {
+        std::string res;
+        res.reserve(str.size());
+        for (size_t i = 0; i < str.size(); ++i) {
+            if (str[i] == '\\' && i + 1 < str.size()) {
+                char c = str[i+1];
+                if (c == 'u' && i + 5 < str.size()) {
+                    // Unicode escape \uXXXX
+                    std::string hex = str.substr(i+2, 4);
+                    try {
+                        int cp = std::stoi(hex, nullptr, 16);
+                        // Encode to UTF-8
+                        if (cp < 0x80) {
+                            res += (char)cp;
+                        } else if (cp < 0x800) {
+                            res += (char)(0xC0 | (cp >> 6));
+                            res += (char)(0x80 | (cp & 0x3F));
+                        } else {
+                            res += (char)(0xE0 | (cp >> 12));
+                            res += (char)(0x80 | ((cp >> 6) & 0x3F));
+                            res += (char)(0x80 | (cp & 0x3F));
+                        }
+                        i += 5;
+                    } catch (...) {
+                        res += "\\u"; // Failed to parse
+                        i++;
+                    }
+                } else {
+                    // Simple escapes
+                    switch(c) {
+                        case '"': res += '"'; break;
+                        case '\\': res += '\\'; break;
+                        case '/': res += '/'; break;
+                        case 'b': res += '\b'; break;
+                        case 'f': res += '\f'; break;
+                        case 'n': res += '\n'; break;
+                        case 'r': res += '\r'; break;
+                        case 't': res += '\t'; break;
+                        default: res += '\\'; res += c; break;
+                    }
+                    i++;
+                }
+            } else {
+                res += str[i];
+            }
+        }
+        return res;
+    }
+
     static std::string getString(const std::string& json, const std::string& key) {
         std::string keyPattern = "\"" + key + "\"";
         size_t keyPos = json.find(keyPattern);
@@ -86,7 +136,8 @@ private:
         size_t endQuote = json.find('"', startQuote + 1);
         if (endQuote == std::string::npos) return "";
         
-        return json.substr(startQuote + 1, endQuote - startQuote - 1);
+        std::string raw = json.substr(startQuote + 1, endQuote - startQuote - 1);
+        return unescape(raw);
     }
 
     static float getFloat(const std::string& json, const std::string& key) {
@@ -123,9 +174,13 @@ typedef struct _corpus_matcher {
     float threshold_db;
     float rate_hz;
     float smoothing;
+    float duration_multiplier;
+    float min_tonality;
+    float min_crest;
     
     // State
     double last_trigger_time;
+    std::map<int, double> band_busy_until;
     float az_x;
     float az_y;
     
@@ -140,18 +195,9 @@ typedef struct _corpus_matcher {
 // Helper: Filter corpus
 static void corpus_matcher_filter(t_corpus_matcher *x) {
     x->filtered_corpus.clear();
-    // Relaxed thresholds for testing
-    // PAD: Lowered thresholds to ensure we get matches. 
-    // Crest of 100 is extremely high (40dB peak-to-average). 
-    // A sine wave has crest factor of 1.414 (3dB). 
-    // Noise is around 3-4 (10-12dB).
-    // Impulsive sounds have high crest.
-    // Let's set a more reasonable default.
-    float tonality_thresh = 0.1f; // was 0.6f
-    float crest_thresh = 2.0f;    // was 100.0f
     
     for (const auto& seg : x->corpus) {
-        if (seg.crest > crest_thresh && seg.tonality > tonality_thresh) {
+        if (seg.crest > x->min_crest && seg.tonality > x->min_tonality) {
             x->filtered_corpus.push_back(seg);
         }
     }
@@ -162,7 +208,8 @@ static void corpus_matcher_filter(t_corpus_matcher *x) {
             return a.centroid < b.centroid;
         });
         
-    // post("corpus.matcher: Loaded %lu segments. Filtered down to %lu", x->corpus.size(), x->filtered_corpus.size());
+    // post("corpus.matcher: Filtered corpus: %lu / %lu (Tonality > %.2f, Crest > %.2f)", 
+    //      x->filtered_corpus.size(), x->corpus.size(), x->min_tonality, x->min_crest);
 }
 
 // Method: Read JSON
@@ -222,6 +269,7 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
         return;
     }
     
+    int band_index = (int)atom_getfloat(argv + 0);
     float azimuth = atom_getfloat(argv + 1);
     float strength = atom_getfloat(argv + 2);
     float level_val = atom_getfloat(argv + 3);
@@ -247,17 +295,26 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
         return;
     }
     
-    // 2. Rate Limiting
-    double now_ms = clock_getlogicaltime(); 
-    double min_interval = 1000.0 / (x->rate_hz > 0 ? x->rate_hz : 0.1f);
-    double elapsed = clock_gettimesince(x->last_trigger_time);
+    // 2. Rate Limiting & Duration Lockout
+    // Use sys_getrealtime() (seconds) to avoid unit ambiguity with clock_getlogicaltime()
+    double now_sec = sys_getrealtime(); 
+    
+    // Check per-band lockout
+    if (x->band_busy_until.count(band_index)) {
+        double until = x->band_busy_until[band_index];
+        if (now_sec < until) {
+            return; // Band is busy playing a sample
+        }
+    }
 
-    if (elapsed < min_interval) {
-        // Debug: Print why we are failing rate limit
-        // post("corpus.matcher: rate limited. elapsed %.2f < min %.2f", elapsed, min_interval);
+    // Global rate limit (optional, but good for safety)
+    double min_interval_sec = 1.0 / (x->rate_hz > 0 ? x->rate_hz : 0.1f);
+    double elapsed_sec = now_sec - x->last_trigger_time;
+
+    if (elapsed_sec < min_interval_sec) {
         return;
     }
-    x->last_trigger_time = now_ms;
+    x->last_trigger_time = now_sec;
     
     // 3. Find Match
     if (x->filtered_corpus.empty()) {
@@ -288,6 +345,17 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
         return;
     }
     
+    // Set lockout for this band
+    // duration is in seconds
+    double duration_sec = closest->duration;
+    if (duration_sec <= 0) duration_sec = 0.1; // Safety minimum
+    
+    double lockout_duration = duration_sec * x->duration_multiplier;
+    x->band_busy_until[band_index] = now_sec + lockout_duration;
+    
+    // post("corpus.matcher: Match! Band %d locked for %.2f s. Now: %.2f, Until: %.2f", 
+    //      band_index, lockout_duration, now_sec, x->band_busy_until[band_index]);
+
     // Debug: Print match info
     // post("corpus.matcher: Match found! Freq: %.2f -> %.2f (Diff: %.2f), File: %s", freq, closest->centroid, min_diff, closest->file.c_str());
     
@@ -312,14 +380,16 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
     // Use the calculated dB value
     float gain = std::pow(10.0f, db_val / 20.0f);
     
-    // Output: filename, gain, rho, azimuth
-    t_atom out_atoms[4];
-    SETSYMBOL(out_atoms + 0, gensym(closest->file.c_str()));
-    SETFLOAT(out_atoms + 1, gain);
-    SETFLOAT(out_atoms + 2, rho);
-    SETFLOAT(out_atoms + 3, smooth_az_deg);
+    // Output: band_index, filename, duration, gain, rho, azimuth
+    t_atom out_atoms[6];
+    SETFLOAT(out_atoms + 0, (float)band_index);
+    SETSYMBOL(out_atoms + 1, gensym(closest->file.c_str()));
+    SETFLOAT(out_atoms + 2, closest->duration);
+    SETFLOAT(out_atoms + 3, gain);
+    SETFLOAT(out_atoms + 4, rho);
+    SETFLOAT(out_atoms + 5, smooth_az_deg);
     
-    outlet_list(x->out_main, &s_list, 4, out_atoms);
+    outlet_list(x->out_main, &s_list, 6, out_atoms);
     
     // Debug info to second outlet
     // t_atom info[2];
@@ -332,6 +402,15 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
 static void corpus_matcher_thresh(t_corpus_matcher *x, t_floatarg f) { x->threshold_db = f; }
 static void corpus_matcher_rate(t_corpus_matcher *x, t_floatarg f) { x->rate_hz = (f > 0 ? f : 0.1f); }
 static void corpus_matcher_smooth(t_corpus_matcher *x, t_floatarg f) { x->smoothing = (f < 0 ? 0 : (f > 1 ? 1 : f)); }
+static void corpus_matcher_durmul(t_corpus_matcher *x, t_floatarg f) { x->duration_multiplier = (f < 0 ? 0 : f); }
+static void corpus_matcher_tonality(t_corpus_matcher *x, t_floatarg f) { 
+    x->min_tonality = f; 
+    corpus_matcher_filter(x);
+}
+static void corpus_matcher_crest(t_corpus_matcher *x, t_floatarg f) { 
+    x->min_crest = f; 
+    corpus_matcher_filter(x);
+}
 
 // Constructor
 static void *corpus_matcher_new(t_symbol *s, int argc, t_atom *argv) {
@@ -343,8 +422,13 @@ static void *corpus_matcher_new(t_symbol *s, int argc, t_atom *argv) {
     x->threshold_db = -40;
     x->rate_hz = 4;
     x->smoothing = 0.5;
+    x->duration_multiplier = 1.0f;
+    x->min_tonality = 0.1f;
+    x->min_crest = 2.0f;
     x->last_trigger_time = 0;
     x->az_x = 0;
+    // x->band_busy_until is auto-initialized (empty map)
+
     x->az_y = 0;
     
     // Parse args
@@ -364,6 +448,12 @@ static void *corpus_matcher_new(t_symbol *s, int argc, t_atom *argv) {
             } else if (flag == "-smooth" && i+1 < argc && argv[i+1].a_type == A_FLOAT) {
                 x->smoothing = argv[i+1].a_w.w_float;
                 i++;
+            } else if (flag == "-tonality" && i+1 < argc && argv[i+1].a_type == A_FLOAT) {
+                x->min_tonality = argv[i+1].a_w.w_float;
+                i++;
+            } else if (flag == "-crest" && i+1 < argc && argv[i+1].a_type == A_FLOAT) {
+                x->min_crest = argv[i+1].a_w.w_float;
+                i++;
             }
         }
     }
@@ -372,6 +462,9 @@ static void *corpus_matcher_new(t_symbol *s, int argc, t_atom *argv) {
     inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("thresh"));
     inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("rate"));
     inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("smooth"));
+    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("durmul"));
+    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("tonality"));
+    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("crest"));
     
     // Outlets
     x->out_main = outlet_new(&x->x_obj, &s_list);
@@ -380,6 +473,7 @@ static void *corpus_matcher_new(t_symbol *s, int argc, t_atom *argv) {
     // Initialize vectors
     new (&x->corpus) std::vector<Segment>();
     new (&x->filtered_corpus) std::vector<Segment>();
+    new (&x->band_busy_until) std::map<int, double>();
     
     return (void *)x;
 }
@@ -387,6 +481,7 @@ static void *corpus_matcher_new(t_symbol *s, int argc, t_atom *argv) {
 static void corpus_matcher_free(t_corpus_matcher *x) {
     x->corpus.~vector();
     x->filtered_corpus.~vector();
+    x->band_busy_until.~map();
 }
 
 extern "C" void setup_torch0x2ecorpus0x2ematcher_tilde(void) {
@@ -402,4 +497,7 @@ extern "C" void setup_torch0x2ecorpus0x2ematcher_tilde(void) {
     class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_thresh, gensym("thresh"), A_FLOAT, 0);
     class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_rate, gensym("rate"), A_FLOAT, 0);
     class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_smooth, gensym("smooth"), A_FLOAT, 0);
+    class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_durmul, gensym("durmul"), A_FLOAT, 0);
+    class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_tonality, gensym("tonality"), A_FLOAT, 0);
+    class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_crest, gensym("crest"), A_FLOAT, 0);
 }
