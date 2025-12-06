@@ -57,6 +57,13 @@ private:
         seg.centroid = 0; seg.tonality = 0; seg.crest = 0; seg.duration = 0;
         
         seg.file = getString(objStr, "file");
+        if (seg.file.empty()) seg.file = getString(objStr, "filename"); // Fallback
+        if (seg.file.empty()) seg.file = getString(objStr, "path");     // Fallback
+        
+        if (seg.file.empty()) {
+             post("corpus.matcher: WARNING: Could not find 'file', 'filename', or 'path' in segment: %s", objStr.c_str());
+        }
+
         seg.centroid = getFloat(objStr, "centroid");
         seg.tonality = getFloat(objStr, "tonality");
         seg.crest = getFloat(objStr, "crest");
@@ -71,13 +78,15 @@ private:
         if (keyPos == std::string::npos) return "";
         
         size_t colonPos = json.find(':', keyPos);
+        if (colonPos == std::string::npos) return "";
+
         size_t startQuote = json.find('"', colonPos);
-        size_t endQuote = json.find('"', startQuote + 1);
+        if (startQuote == std::string::npos) return "";
         
-        if (startQuote != std::string::npos && endQuote != std::string::npos) {
-            return json.substr(startQuote + 1, endQuote - startQuote - 1);
-        }
-        return "";
+        size_t endQuote = json.find('"', startQuote + 1);
+        if (endQuote == std::string::npos) return "";
+        
+        return json.substr(startQuote + 1, endQuote - startQuote - 1);
     }
 
     static float getFloat(const std::string& json, const std::string& key) {
@@ -132,8 +141,14 @@ typedef struct _corpus_matcher {
 static void corpus_matcher_filter(t_corpus_matcher *x) {
     x->filtered_corpus.clear();
     // Relaxed thresholds for testing
-    float tonality_thresh = 0.0f; // was 0.6f
-    float crest_thresh = 0.0f;    // was 100.0f
+    // PAD: Lowered thresholds to ensure we get matches. 
+    // Crest of 100 is extremely high (40dB peak-to-average). 
+    // A sine wave has crest factor of 1.414 (3dB). 
+    // Noise is around 3-4 (10-12dB).
+    // Impulsive sounds have high crest.
+    // Let's set a more reasonable default.
+    float tonality_thresh = 0.1f; // was 0.6f
+    float crest_thresh = 2.0f;    // was 100.0f
     
     for (const auto& seg : x->corpus) {
         if (seg.crest > crest_thresh && seg.tonality > tonality_thresh) {
@@ -147,7 +162,7 @@ static void corpus_matcher_filter(t_corpus_matcher *x) {
             return a.centroid < b.centroid;
         });
         
-    post("corpus.matcher: Loaded %lu segments. Filtered down to %lu", x->corpus.size(), x->filtered_corpus.size());
+    // post("corpus.matcher: Loaded %lu segments. Filtered down to %lu", x->corpus.size(), x->filtered_corpus.size());
 }
 
 // Method: Read JSON
@@ -163,15 +178,17 @@ static void corpus_matcher_read(t_corpus_matcher *x, t_symbol *s) {
             std::string path = std::string(dir) + "/" + filename;
             file.open(path);
             if (file.is_open()) {
-                post("corpus.matcher: Opened %s", path.c_str());
+                // post("corpus.matcher: Opened %s", path.c_str());
             } else {
-                 post("corpus.matcher: Failed to open %s", path.c_str());
+                 // post("corpus.matcher: Failed to open %s", path.c_str());
             }
+        } else {
+            // post("corpus.matcher: No canvas found to resolve relative path for %s", filename.c_str());
         }
     }
     
     if (!file.is_open()) {
-        pd_error(x, "corpus.matcher: Could not open file %s", filename.c_str());
+        pd_error(x, "corpus.matcher: Could not open file %s (checked absolute and relative to canvas)", filename.c_str());
         return;
     }
     
@@ -184,14 +201,14 @@ static void corpus_matcher_read(t_corpus_matcher *x, t_symbol *s) {
         return;
     }
 
-    // post("corpus.matcher: Read %lu bytes from file", content.size());
+    // post("corpus.matcher: Read %lu bytes from file. Parsing...", content.size());
     
     x->corpus = SimpleJsonParser::parse(content);
     
     if (x->corpus.empty()) {
-         pd_error(x, "corpus.matcher: Parsed 0 segments from JSON. Check format.");
-         // Debug: print first few chars
-         // post("corpus.matcher: Content start: %.100s", content.c_str());
+         pd_error(x, "corpus.matcher: Parsed 0 segments from JSON. Check format. Content start: %.50s...", content.c_str());
+    } else {
+         // post("corpus.matcher: Successfully parsed %lu segments.", x->corpus.size());
     }
 
     corpus_matcher_filter(x);
@@ -207,12 +224,26 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
     
     float azimuth = atom_getfloat(argv + 1);
     float strength = atom_getfloat(argv + 2);
-    float level_db = atom_getfloat(argv + 3);
+    float level_val = atom_getfloat(argv + 3);
     float freq = atom_getfloat(argv + 4);
     
     // 1. Threshold Check
-    if (level_db < x->threshold_db) {
-        // post("corpus.matcher: level %.2f < thresh %.2f", level_db, x->threshold_db);
+    // PAD: User reports input is 0-20 (Linear Magnitude).
+    // We convert to dB for consistent thresholding if it looks linear.
+    // If level_val is linear magnitude:
+    float db_val = -144.0f;
+    if (level_val > 0.0000001f) {
+        db_val = 20.0f * std::log10(level_val);
+    }
+    
+    // If the user is sending dB (negative values), use as is.
+    if (level_val < 0.0f) {
+        db_val = level_val;
+    }
+
+    if (db_val < x->threshold_db) {
+        // Debug: Print why we are failing threshold
+        // post("corpus.matcher: level %.2f (dB %.2f) < thresh %.2f", level_val, db_val, x->threshold_db);
         return;
     }
     
@@ -222,6 +253,7 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
     double elapsed = clock_gettimesince(x->last_trigger_time);
 
     if (elapsed < min_interval) {
+        // Debug: Print why we are failing rate limit
         // post("corpus.matcher: rate limited. elapsed %.2f < min %.2f", elapsed, min_interval);
         return;
     }
@@ -229,6 +261,12 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
     
     // 3. Find Match
     if (x->filtered_corpus.empty()) {
+        // Try to use full corpus if filtered is empty
+        if (x->corpus.empty()) {
+             post("corpus.matcher: corpus is empty! (Total loaded: %lu)", x->corpus.size());
+             return;
+        }
+        // Fallback to full corpus? No, let's respect the filter but warn once.
         post("corpus.matcher: filtered corpus is empty! (Total loaded: %lu)", x->corpus.size());
         return;
     }
@@ -246,9 +284,12 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
     }
     
     if (!closest) {
-        post("corpus.matcher: no closest match found?");
+        // post("corpus.matcher: no closest match found?");
         return;
     }
+    
+    // Debug: Print match info
+    // post("corpus.matcher: Match found! Freq: %.2f -> %.2f (Diff: %.2f), File: %s", freq, closest->centroid, min_diff, closest->file.c_str());
     
     // 4. Calculate Outputs
     
@@ -268,7 +309,8 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
     float rho = std::pow(strength, 0.5f);
     
     // Gain
-    float gain = std::pow(10.0f, level_db / 20.0f);
+    // Use the calculated dB value
+    float gain = std::pow(10.0f, db_val / 20.0f);
     
     // Output: filename, gain, rho, azimuth
     t_atom out_atoms[4];
@@ -280,10 +322,10 @@ static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_at
     outlet_list(x->out_main, &s_list, 4, out_atoms);
     
     // Debug info to second outlet
-    t_atom info[2];
-    SETSYMBOL(info, gensym("match_freq"));
-    SETFLOAT(info+1, closest->centroid);
-    outlet_anything(x->out_info, gensym("debug"), 2, info);
+    // t_atom info[2];
+    // SETSYMBOL(info, gensym("match_freq"));
+    // SETFLOAT(info+1, closest->centroid);
+    // outlet_anything(x->out_info, gensym("debug"), 2, info);
 }
 
 // Parameter methods
