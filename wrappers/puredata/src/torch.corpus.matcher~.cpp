@@ -1,0 +1,503 @@
+#include "m_pd.h"
+#include <string>
+#include <vector>
+#include <cmath>
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <iostream>
+#include <map>
+
+// Minimal JSON Parser for the specific format
+// [ {"key": val, ...}, ... ]
+struct Segment {
+    std::string file;
+    float centroid;
+    float tonality;
+    float crest;
+    float duration;
+};
+
+class SimpleJsonParser {
+public:
+    static std::vector<Segment> parse(const std::string& content) {
+        std::vector<Segment> segments;
+        size_t pos = 0;
+        
+        // Find start of array
+        size_t arrayStart = content.find('[', pos);
+        if (arrayStart == std::string::npos) {
+             post("corpus.matcher: JSON parse error: Could not find start of array '['");
+             return segments;
+        }
+        pos = arrayStart + 1;
+
+        while (true) {
+            // Find start of object
+            size_t objStart = content.find('{', pos);
+            if (objStart == std::string::npos) break;
+            
+            // Parse object
+            size_t endObj = content.find('}', objStart);
+            if (endObj == std::string::npos) {
+                post("corpus.matcher: JSON parse error: Could not find end of object '}'");
+                break;
+            }
+            
+            std::string objStr = content.substr(objStart, endObj - objStart + 1);
+            segments.push_back(parseObject(objStr));
+            
+            pos = endObj + 1;
+        }
+        return segments;
+    }
+
+private:
+    static Segment parseObject(const std::string& objStr) {
+        Segment seg;
+        seg.centroid = 0; seg.tonality = 0; seg.crest = 0; seg.duration = 0;
+        
+        seg.file = getString(objStr, "file");
+        if (seg.file.empty()) seg.file = getString(objStr, "filename"); // Fallback
+        if (seg.file.empty()) seg.file = getString(objStr, "path");     // Fallback
+        
+        if (seg.file.empty()) {
+             post("corpus.matcher: WARNING: Could not find 'file', 'filename', or 'path' in segment: %s", objStr.c_str());
+        }
+
+        seg.centroid = getFloat(objStr, "centroid");
+        seg.tonality = getFloat(objStr, "tonality");
+        seg.crest = getFloat(objStr, "crest");
+        seg.duration = getFloat(objStr, "duration");
+        
+        return seg;
+    }
+
+    static std::string unescape(const std::string& str) {
+        std::string res;
+        res.reserve(str.size());
+        for (size_t i = 0; i < str.size(); ++i) {
+            if (str[i] == '\\' && i + 1 < str.size()) {
+                char c = str[i+1];
+                if (c == 'u' && i + 5 < str.size()) {
+                    // Unicode escape \uXXXX
+                    std::string hex = str.substr(i+2, 4);
+                    try {
+                        int cp = std::stoi(hex, nullptr, 16);
+                        // Encode to UTF-8
+                        if (cp < 0x80) {
+                            res += (char)cp;
+                        } else if (cp < 0x800) {
+                            res += (char)(0xC0 | (cp >> 6));
+                            res += (char)(0x80 | (cp & 0x3F));
+                        } else {
+                            res += (char)(0xE0 | (cp >> 12));
+                            res += (char)(0x80 | ((cp >> 6) & 0x3F));
+                            res += (char)(0x80 | (cp & 0x3F));
+                        }
+                        i += 5;
+                    } catch (...) {
+                        res += "\\u"; // Failed to parse
+                        i++;
+                    }
+                } else {
+                    // Simple escapes
+                    switch(c) {
+                        case '"': res += '"'; break;
+                        case '\\': res += '\\'; break;
+                        case '/': res += '/'; break;
+                        case 'b': res += '\b'; break;
+                        case 'f': res += '\f'; break;
+                        case 'n': res += '\n'; break;
+                        case 'r': res += '\r'; break;
+                        case 't': res += '\t'; break;
+                        default: res += '\\'; res += c; break;
+                    }
+                    i++;
+                }
+            } else {
+                res += str[i];
+            }
+        }
+        return res;
+    }
+
+    static std::string getString(const std::string& json, const std::string& key) {
+        std::string keyPattern = "\"" + key + "\"";
+        size_t keyPos = json.find(keyPattern);
+        if (keyPos == std::string::npos) return "";
+        
+        size_t colonPos = json.find(':', keyPos);
+        if (colonPos == std::string::npos) return "";
+
+        size_t startQuote = json.find('"', colonPos);
+        if (startQuote == std::string::npos) return "";
+        
+        size_t endQuote = json.find('"', startQuote + 1);
+        if (endQuote == std::string::npos) return "";
+        
+        std::string raw = json.substr(startQuote + 1, endQuote - startQuote - 1);
+        return unescape(raw);
+    }
+
+    static float getFloat(const std::string& json, const std::string& key) {
+        std::string keyPattern = "\"" + key + "\"";
+        size_t keyPos = json.find(keyPattern);
+        if (keyPos == std::string::npos) return 0.0f;
+        
+        size_t colonPos = json.find(':', keyPos);
+        size_t valStart = json.find_first_of("0123456789-.", colonPos);
+        size_t valEnd = json.find_first_not_of("0123456789-.eE", valStart);
+        
+        if (valStart != std::string::npos) {
+            std::string valStr = json.substr(valStart, valEnd - valStart);
+            try {
+                return std::stof(valStr);
+            } catch (...) {
+                return 0.0f;
+            }
+        }
+        return 0.0f;
+    }
+};
+
+static t_class *corpus_matcher_class;
+
+typedef struct _corpus_matcher {
+    t_object x_obj;
+    
+    // Outlets
+    t_outlet *out_main; // list: filename gain rho azimuth
+    t_outlet *out_info; // info/debug
+    
+    // Parameters
+    float threshold_db;
+    float rate_hz;
+    float smoothing;
+    float duration_multiplier;
+    float min_tonality;
+    float min_crest;
+    
+    // State
+    double last_trigger_time;
+    std::map<int, double> band_busy_until;
+    float az_x;
+    float az_y;
+    
+    // Corpus
+    std::vector<Segment> corpus;
+    std::vector<Segment> filtered_corpus;
+    
+    t_canvas *x_canvas;
+
+} t_corpus_matcher;
+
+// Helper: Filter corpus
+static void corpus_matcher_filter(t_corpus_matcher *x) {
+    x->filtered_corpus.clear();
+    
+    for (const auto& seg : x->corpus) {
+        if (seg.crest > x->min_crest && seg.tonality > x->min_tonality) {
+            x->filtered_corpus.push_back(seg);
+        }
+    }
+    
+    // Sort by centroid
+    std::sort(x->filtered_corpus.begin(), x->filtered_corpus.end(), 
+        [](const Segment& a, const Segment& b) {
+            return a.centroid < b.centroid;
+        });
+        
+    // post("corpus.matcher: Filtered corpus: %lu / %lu (Tonality > %.2f, Crest > %.2f)", 
+    //      x->filtered_corpus.size(), x->corpus.size(), x->min_tonality, x->min_crest);
+}
+
+// Method: Read JSON
+static void corpus_matcher_read(t_corpus_matcher *x, t_symbol *s) {
+    std::string filename = s->s_name;
+    std::ifstream file(filename);
+    
+    // Try relative to canvas if absolute fails
+    if (!file.is_open()) {
+        t_canvas *canvas = x->x_canvas;
+        if (canvas) {
+            const char *dir = canvas_getdir(canvas)->s_name;
+            std::string path = std::string(dir) + "/" + filename;
+            file.open(path);
+            if (file.is_open()) {
+                // post("corpus.matcher: Opened %s", path.c_str());
+            } else {
+                 // post("corpus.matcher: Failed to open %s", path.c_str());
+            }
+        } else {
+            // post("corpus.matcher: No canvas found to resolve relative path for %s", filename.c_str());
+        }
+    }
+    
+    if (!file.is_open()) {
+        pd_error(x, "corpus.matcher: Could not open file %s (checked absolute and relative to canvas)", filename.c_str());
+        return;
+    }
+    
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    std::string content = buffer.str();
+    
+    if (content.empty()) {
+        pd_error(x, "corpus.matcher: File %s is empty", filename.c_str());
+        return;
+    }
+
+    // post("corpus.matcher: Read %lu bytes from file. Parsing...", content.size());
+    
+    x->corpus = SimpleJsonParser::parse(content);
+    
+    if (x->corpus.empty()) {
+         pd_error(x, "corpus.matcher: Parsed 0 segments from JSON. Check format. Content start: %.50s...", content.c_str());
+    } else {
+         // post("corpus.matcher: Successfully parsed %lu segments.", x->corpus.size());
+    }
+
+    corpus_matcher_filter(x);
+}
+
+// Method: List input
+// <band_index> <azimuth> <strength> <level_db> <frequency>
+static void corpus_matcher_list(t_corpus_matcher *x, t_symbol *s, int argc, t_atom *argv) {
+    if (argc < 5) {
+        // post("corpus.matcher: received list with %d args, expected >= 5", argc);
+        return;
+    }
+    
+    int band_index = (int)atom_getfloat(argv + 0);
+    float azimuth = atom_getfloat(argv + 1);
+    float strength = atom_getfloat(argv + 2);
+    float level_val = atom_getfloat(argv + 3);
+    float freq = atom_getfloat(argv + 4);
+    
+    // 1. Threshold Check
+    // PAD: User reports input is 0-20 (Linear Magnitude).
+    // We convert to dB for consistent thresholding if it looks linear.
+    // If level_val is linear magnitude:
+    float db_val = -144.0f;
+    if (level_val > 0.0000001f) {
+        db_val = 20.0f * std::log10(level_val);
+    }
+    
+    // If the user is sending dB (negative values), use as is.
+    if (level_val < 0.0f) {
+        db_val = level_val;
+    }
+
+    if (db_val < x->threshold_db) {
+        // Debug: Print why we are failing threshold
+        // post("corpus.matcher: level %.2f (dB %.2f) < thresh %.2f", level_val, db_val, x->threshold_db);
+        return;
+    }
+    
+    // 2. Rate Limiting & Duration Lockout
+    // Use sys_getrealtime() (seconds) to avoid unit ambiguity with clock_getlogicaltime()
+    double now_sec = sys_getrealtime(); 
+    
+    // Check per-band lockout
+    if (x->band_busy_until.count(band_index)) {
+        double until = x->band_busy_until[band_index];
+        if (now_sec < until) {
+            return; // Band is busy playing a sample
+        }
+    }
+
+    // Global rate limit (optional, but good for safety)
+    double min_interval_sec = 1.0 / (x->rate_hz > 0 ? x->rate_hz : 0.1f);
+    double elapsed_sec = now_sec - x->last_trigger_time;
+
+    if (elapsed_sec < min_interval_sec) {
+        return;
+    }
+    x->last_trigger_time = now_sec;
+    
+    // 3. Find Match
+    if (x->filtered_corpus.empty()) {
+        // Try to use full corpus if filtered is empty
+        if (x->corpus.empty()) {
+             post("corpus.matcher: corpus is empty! (Total loaded: %lu)", x->corpus.size());
+             return;
+        }
+        // Fallback to full corpus? No, let's respect the filter but warn once.
+        post("corpus.matcher: filtered corpus is empty! (Total loaded: %lu)", x->corpus.size());
+        return;
+    }
+    
+    const Segment* closest = nullptr;
+    float min_diff = 1e9f; // Large number
+    
+    // Linear search (optimize to binary later if needed)
+    for (const auto& seg : x->filtered_corpus) {
+        float diff = std::abs(seg.centroid - freq);
+        if (diff < min_diff) {
+            min_diff = diff;
+            closest = &seg;
+        }
+    }
+    
+    if (!closest) {
+        // post("corpus.matcher: no closest match found?");
+        return;
+    }
+    
+    // Set lockout for this band
+    // duration is in seconds
+    double duration_sec = closest->duration;
+    if (duration_sec <= 0) duration_sec = 0.1; // Safety minimum
+    
+    double lockout_duration = duration_sec * x->duration_multiplier;
+    x->band_busy_until[band_index] = now_sec + lockout_duration;
+    
+    // post("corpus.matcher: Match! Band %d locked for %.2f s. Now: %.2f, Until: %.2f", 
+    //      band_index, lockout_duration, now_sec, x->band_busy_until[band_index]);
+
+    // Debug: Print match info
+    // post("corpus.matcher: Match found! Freq: %.2f -> %.2f (Diff: %.2f), File: %s", freq, closest->centroid, min_diff, closest->file.c_str());
+    
+    // 4. Calculate Outputs
+    
+    // Azimuth Smoothing
+    float rad = azimuth * (M_PI / 180.0f);
+    float input_x = std::cos(rad);
+    float input_y = std::sin(rad);
+    
+    float s_factor = x->smoothing;
+    x->az_x = x->az_x * s_factor + input_x * (1.0f - s_factor);
+    x->az_y = x->az_y * s_factor + input_y * (1.0f - s_factor);
+    
+    float smooth_az_rad = std::atan2(x->az_y, x->az_x);
+    float smooth_az_deg = smooth_az_rad * (180.0f / M_PI);
+    
+    // Rho
+    float rho = std::pow(strength, 0.5f);
+    
+    // Gain
+    // Use the calculated dB value
+    float gain = std::pow(10.0f, db_val / 20.0f);
+    
+    // Output: band_index, filename, duration, gain, rho, azimuth
+    t_atom out_atoms[6];
+    SETFLOAT(out_atoms + 0, (float)band_index);
+    SETSYMBOL(out_atoms + 1, gensym(closest->file.c_str()));
+    SETFLOAT(out_atoms + 2, closest->duration);
+    SETFLOAT(out_atoms + 3, gain);
+    SETFLOAT(out_atoms + 4, rho);
+    SETFLOAT(out_atoms + 5, smooth_az_deg);
+    
+    outlet_list(x->out_main, &s_list, 6, out_atoms);
+    
+    // Debug info to second outlet
+    // t_atom info[2];
+    // SETSYMBOL(info, gensym("match_freq"));
+    // SETFLOAT(info+1, closest->centroid);
+    // outlet_anything(x->out_info, gensym("debug"), 2, info);
+}
+
+// Parameter methods
+static void corpus_matcher_thresh(t_corpus_matcher *x, t_floatarg f) { x->threshold_db = f; }
+static void corpus_matcher_rate(t_corpus_matcher *x, t_floatarg f) { x->rate_hz = (f > 0 ? f : 0.1f); }
+static void corpus_matcher_smooth(t_corpus_matcher *x, t_floatarg f) { x->smoothing = (f < 0 ? 0 : (f > 1 ? 1 : f)); }
+static void corpus_matcher_durmul(t_corpus_matcher *x, t_floatarg f) { x->duration_multiplier = (f < 0 ? 0 : f); }
+static void corpus_matcher_tonality(t_corpus_matcher *x, t_floatarg f) { 
+    x->min_tonality = f; 
+    corpus_matcher_filter(x);
+}
+static void corpus_matcher_crest(t_corpus_matcher *x, t_floatarg f) { 
+    x->min_crest = f; 
+    corpus_matcher_filter(x);
+}
+
+// Constructor
+static void *corpus_matcher_new(t_symbol *s, int argc, t_atom *argv) {
+    t_corpus_matcher *x = (t_corpus_matcher *)pd_new(corpus_matcher_class);
+    
+    x->x_canvas = canvas_getcurrent();
+    
+    // Defaults
+    x->threshold_db = -40;
+    x->rate_hz = 4;
+    x->smoothing = 0.5;
+    x->duration_multiplier = 1.0f;
+    x->min_tonality = 0.1f;
+    x->min_crest = 2.0f;
+    x->last_trigger_time = 0;
+    x->az_x = 0;
+    // x->band_busy_until is auto-initialized (empty map)
+
+    x->az_y = 0;
+    
+    // Parse args
+    // Simple arg parsing: -file <f> -thresh <t> -rate <r> -smooth <s>
+    for (int i = 0; i < argc; i++) {
+        if (argv[i].a_type == A_SYMBOL) {
+            std::string flag = argv[i].a_w.w_symbol->s_name;
+            if (flag == "-file" && i+1 < argc && argv[i+1].a_type == A_SYMBOL) {
+                corpus_matcher_read(x, argv[i+1].a_w.w_symbol);
+                i++;
+            } else if (flag == "-thresh" && i+1 < argc && argv[i+1].a_type == A_FLOAT) {
+                x->threshold_db = argv[i+1].a_w.w_float;
+                i++;
+            } else if (flag == "-rate" && i+1 < argc && argv[i+1].a_type == A_FLOAT) {
+                x->rate_hz = argv[i+1].a_w.w_float;
+                i++;
+            } else if (flag == "-smooth" && i+1 < argc && argv[i+1].a_type == A_FLOAT) {
+                x->smoothing = argv[i+1].a_w.w_float;
+                i++;
+            } else if (flag == "-tonality" && i+1 < argc && argv[i+1].a_type == A_FLOAT) {
+                x->min_tonality = argv[i+1].a_w.w_float;
+                i++;
+            } else if (flag == "-crest" && i+1 < argc && argv[i+1].a_type == A_FLOAT) {
+                x->min_crest = argv[i+1].a_w.w_float;
+                i++;
+            }
+        }
+    }
+    
+    // Inlets
+    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("thresh"));
+    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("rate"));
+    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("smooth"));
+    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("durmul"));
+    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("tonality"));
+    inlet_new(&x->x_obj, &x->x_obj.ob_pd, &s_float, gensym("crest"));
+    
+    // Outlets
+    x->out_main = outlet_new(&x->x_obj, &s_list);
+    x->out_info = outlet_new(&x->x_obj, &s_anything);
+    
+    // Initialize vectors
+    new (&x->corpus) std::vector<Segment>();
+    new (&x->filtered_corpus) std::vector<Segment>();
+    new (&x->band_busy_until) std::map<int, double>();
+    
+    return (void *)x;
+}
+
+static void corpus_matcher_free(t_corpus_matcher *x) {
+    x->corpus.~vector();
+    x->filtered_corpus.~vector();
+    x->band_busy_until.~map();
+}
+
+extern "C" void setup_torch0x2ecorpus0x2ematcher_tilde(void) {
+    corpus_matcher_class = class_new(gensym("torch.corpus.matcher~"),
+        (t_newmethod)corpus_matcher_new,
+        (t_method)corpus_matcher_free,
+        sizeof(t_corpus_matcher),
+        CLASS_DEFAULT,
+        A_GIMME, 0);
+        
+    class_addlist(corpus_matcher_class, corpus_matcher_list);
+    class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_read, gensym("read"), A_SYMBOL, 0);
+    class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_thresh, gensym("thresh"), A_FLOAT, 0);
+    class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_rate, gensym("rate"), A_FLOAT, 0);
+    class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_smooth, gensym("smooth"), A_FLOAT, 0);
+    class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_durmul, gensym("durmul"), A_FLOAT, 0);
+    class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_tonality, gensym("tonality"), A_FLOAT, 0);
+    class_addmethod(corpus_matcher_class, (t_method)corpus_matcher_crest, gensym("crest"), A_FLOAT, 0);
+}

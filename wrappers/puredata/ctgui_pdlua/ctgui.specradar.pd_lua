@@ -32,6 +32,14 @@ function mic_vis:initialize(sel, atoms)
     self.num_bands = parser:get_float("num", 4) or 4
     if self.num_bands < 1 then self.num_bands = 1 end
     
+    self.distinct_mode = parser:get_bool("distinct")
+    
+    local sel_val = parser:get_value("sel")
+    if type(sel_val) == "number" then
+        self.sel_index = sel_val
+        self.inlets = 2
+    end
+    
     -- Graphics
     local w = parser:get_float("w width", 180) or 180
     local h = parser:get_float("h height", 180) or 180
@@ -110,12 +118,24 @@ end
 
 function mic_vis:in_1_list(atoms)
     -- Format: <band_index> <angle_deg> <strength> <overall_level> <dominant_freq_hz>
-    if #atoms < 5 then return end
     
-    local band_idx = atoms[1]
-    local angle = atoms[2]
-    local strength = atoms[3]
-    local level = atoms[4] -- Power/Level
+    local band_idx, angle, strength, level
+    
+    if self.sel_index ~= nil then
+         -- In sel mode, input is: <angle> <strength> <level> <freq>
+         if #atoms < 4 then return end
+         band_idx = self.sel_index
+         angle = atoms[1]
+         strength = atoms[2]
+         level = atoms[3]
+    else
+         -- Default mode: <band_index> <angle_deg> <strength> <overall_level> <dominant_freq_hz>
+         if #atoms < 5 then return end
+         band_idx = atoms[1]
+         angle = atoms[2]
+         strength = atoms[3]
+         level = atoms[4]
+    end
     
     -- Add to detections
     table.insert(self.detections, {
@@ -123,7 +143,25 @@ function mic_vis:in_1_list(atoms)
         angle = angle,
         strength = strength,
         level = level,
-        age = 0
+        age = 0,
+        is_neutral = false
+    })
+end
+
+function mic_vis:in_2_list(atoms)
+    -- Neutral input: <angle> <strength> <level> <freq>
+    if #atoms < 4 then return end
+    local angle = atoms[1]
+    local strength = atoms[2]
+    local level = atoms[3]
+    
+    table.insert(self.detections, {
+        band_idx = 0,
+        angle = angle,
+        strength = strength,
+        level = level,
+        age = 0,
+        is_neutral = true
     })
 end
 
@@ -211,14 +249,30 @@ function mic_vis:paint(g)
         local x = cx - r * math.sin(angle_rad)
         local y = cy - r * math.cos(angle_rad)
         
-        -- Color (Hue) based on Band Index and Num Bands
-        -- Divide hue continuum in equal parts
-        local hue = (d.band_idx / self.num_bands) % 1.0
+        -- Color
+        local r_col, g_col, b_col
+        if d.is_neutral then
+            r_col, g_col, b_col = 0.85, 0.85, 0.85
+        else
+            local hue
+            if self.distinct_mode then
+                -- Golden angle approximation for distinct colors
+                hue = (d.band_idx * 0.61803398875) % 1.0
+            else
+                -- Divide hue continuum in equal parts
+                hue = (d.band_idx / self.num_bands) % 1.0
+            end
+            r_col, g_col, b_col = Colors.hsb(hue, 1, 1)
+        end
         
         -- Alpha (Transparency) based on Strength
         -- Clamp strength to 0-1 to avoid invalid alpha
         local s_clamped = math.max(0, math.min(1, d.strength))
         local alpha = 0.3 + 0.7 * s_clamped
+        
+        if d.is_neutral then
+            alpha = alpha * 0.4
+        end
         
         -- Size based on Power (Level)
         -- Handle dB (negative values) or large linear values
@@ -234,9 +288,6 @@ function mic_vis:paint(g)
         -- Clamp size to widget dimensions to prevent "Red Screen of Death"
         size = math.min(size, math.min(w, h))
 
-        -- Get RGB
-        local r_col, g_col, b_col = Colors.hsb(hue, 1, 1)
-        
         -- Draw
         -- If alpha supported: g:set_color(r, g, b, alpha)
         -- We'll try passing 4 args.
@@ -276,6 +327,21 @@ function mic_vis:in_1_num(atoms)
     end
 end
 
+function mic_vis:in_1_distinct(atoms)
+    if type(atoms[1]) == "number" then
+        self.distinct_mode = (atoms[1] ~= 0)
+        self:repaint()
+    end
+end
+
+function mic_vis:in_1_sel(atoms)
+    if atoms[1] == "all" then
+        self.sel_index = nil
+    elseif type(atoms[1]) == "number" then
+        self.sel_index = atoms[1]
+    end
+end
+
 function mic_vis:in_1_getcode(atoms)
     local w, h = self:get_size()
     local cmd = "ctgui.specradar"
@@ -287,6 +353,14 @@ function mic_vis:in_1_getcode(atoms)
     end
     
     cmd = cmd .. string.format(" @gain %g @fps %g @num %g", self.gain, self.fps, self.num_bands)
+    
+    if self.distinct_mode then
+        cmd = cmd .. " @distinct"
+    end
+    
+    if self.sel_index ~= nil then
+        cmd = cmd .. string.format(" @sel %g", self.sel_index)
+    end
     
     if self.dark_mode then
         cmd = cmd .. " @dark"
