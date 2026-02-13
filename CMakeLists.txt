@@ -14,6 +14,13 @@ option(BUILD_PYTHON_WRAPPER "Build the Python wrapper" OFF)
 # --- Testing (Optional, but recommended) ---
 option(BUILD_TESTS "Build tests for the project" OFF)
 
+# --- ctgui Integration (Optional) ---
+option(CTGUI_ENABLE "Enable ctgui GUI library integration" OFF)
+set(CTGUI_SOURCE_DIR "" CACHE PATH "Path to local ctgui source directory (if not set, will use FetchContent)")
+
+# --- Version Settings ---
+set(PDVERSION "0.56-2" CACHE STRING "Pure Data version to fetch if not found locally")
+
 # --- Standard Settings ---
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -368,6 +375,32 @@ if(BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
+# --- ctgui Integration (Optional subproject) ---
+if(CTGUI_ENABLE)
+    message(STATUS "ctgui integration enabled")
+    
+    if(CTGUI_SOURCE_DIR AND EXISTS "${CTGUI_SOURCE_DIR}/CMakeLists.txt")
+        # Use local ctgui source directory
+        message(STATUS "Using local ctgui source: ${CTGUI_SOURCE_DIR}")
+        add_subdirectory(${CTGUI_SOURCE_DIR} ${CMAKE_BINARY_DIR}/ctgui-build)
+    else()
+        # Fetch ctgui from GitHub
+        message(STATUS "Fetching ctgui from GitHub...")
+        
+        FetchContent_Declare(
+            ctgui
+            GIT_REPOSITORY https://github.com/ecrisufmg/ctgui.git
+            GIT_TAG        main
+        )
+        
+        FetchContent_MakeAvailable(ctgui)
+    endif()
+    
+    message(STATUS "ctgui configured and will be built as subproject")
+else()
+    message(STATUS "ctgui integration disabled (set CTGUI_ENABLE=ON to enable)")
+endif()
+
 # --- Default Build Type ---
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Default build type" FORCE)
@@ -411,10 +444,10 @@ endif()
 set(RESOURCES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/resources)
 if(EXISTS ${RESOURCES_DIR})
     set(WRAPPER_DIST_DIRS
-        ${PROJECT_DIST_DIR}/puredata/contorchionistSN
-        ${PROJECT_DIST_DIR}/max/contorchionistSN
-        ${PROJECT_DIST_DIR}/supercollider/contorchionistSN
-        ${PROJECT_DIST_DIR}/python/contorchionistSN
+        ${PROJECT_DIST_DIR}/puredata/contorchionist
+        ${PROJECT_DIST_DIR}/max/contorchionist
+        ${PROJECT_DIST_DIR}/supercollider/contorchionist
+        ${PROJECT_DIST_DIR}/python/contorchionist
     )
 
     # Create a single target that handles all resource copying
@@ -447,59 +480,124 @@ set(PLUGDATA_USER_DIR "$ENV{HOME}/Documents/plugdata/Externals")
 set(PD_OUTPUT_DIR "${PROJECT_DIST_DIR}/puredata")
 
 # ------------------------------------------------------------
-# Custom install target that performs the copy without
+# Custom install targets that perform the copy without
 # invoking the top-level cmake install (avoids subproject install errors)
 # Usage: cmake --build build --target install-puredata
+#        cmake --build build --target install-plugdata
 # ------------------------------------------------------------
 
-# Create a small CMake script under the build dir that will perform the copy
-file(WRITE "${CMAKE_BINARY_DIR}/install_puredata.cmake"
+# Create CMake script for Pure Data installation
+if(CTGUI_ENABLE)
+    # When ctgui is enabled, copy both conTorchionist and ctgui distributions
+    set(CTGUI_DIST_DIR "${PROJECT_DIST_DIR}/ctgui")
+    
+    file(WRITE "${CMAKE_BINARY_DIR}/install_contorchionist_puredata.cmake"
+"message(STATUS \"Running combined install script for Pure Data...\")\n"
+"# Install conTorchionist\n"
+"if(EXISTS \"${PD_USER_PDDIR}\")\n"
+"  message(STATUS \"Installing conTorchionist to ${PD_USER_PDDIR}...\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/contorchionist\" DESTINATION \"${PD_USER_PDDIR}\")\n"
+"  message(STATUS \"Copied conTorchionist to ${PD_USER_PDDIR}\")\n"
+"  \n"
+"  # Install ctgui if its distribution exists\n"
+"  if(EXISTS \"${CTGUI_DIST_DIR}\")\n"
+"    message(STATUS \"Installing ctgui to ${PD_USER_PDDIR}...\")\n"
+"    file(COPY \"${CTGUI_DIST_DIR}\" DESTINATION \"${PD_USER_PDDIR}\")\n"
+"    message(STATUS \"Copied ctgui to ${PD_USER_PDDIR}\")\n"
+"  else()\n"
+"    message(WARNING \"ctgui distribution not found at ${CTGUI_DIST_DIR}\")\n"
+"  endif()\n"
+"else()\n"
+"  message(WARNING \"Pd externals dir ${PD_USER_PDDIR} not found; skipping installation\")\n"
+"endif()\n")
+    
+    add_custom_target(install-all-puredata
+        COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/install_contorchionist_puredata.cmake
+        COMMENT "Install conTorchionist and ctgui to Pure Data user directory"
+        VERBATIM
+    )
+    
+    message(STATUS "When CTGUI_ENABLE is ON, use 'install-all-puredata' target for combined installation")
+    
+else()
+    # conTorchionist-only install script
+    file(WRITE "${CMAKE_BINARY_DIR}/install_puredata.cmake"
 "message(STATUS \"Running install-puredata script...\")\n"
 "if(EXISTS \"${PD_USER_PDDIR}\")\n"
 "  message(STATUS \"Found target Pd externals dir: ${PD_USER_PDDIR} - copying distribution...\")\n"
-"  file(COPY \"${PD_OUTPUT_DIR}/contorchionistSN\" DESTINATION \"${PD_USER_PDDIR}\")\n"
-"  file(COPY \"${PD_OUTPUT_DIR}/ctgui\" DESTINATION \"${PD_USER_PDDIR}\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/contorchionist\" DESTINATION \"${PD_USER_PDDIR}\")\n"
 "  message(STATUS \"Copied distribution to ${PD_USER_PDDIR}\")\n"
 "else()\n"
 "  message(STATUS \"Pd externals dir ${PD_USER_PDDIR} not found; skipping copy\")\n"
-"endif()\n"
+"endif()\n")
+    
+    add_custom_target(install-puredata
+        COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/install_puredata.cmake
+        COMMENT "Install Pure Data externals to Pure Data user directory"
+        VERBATIM
+    )
+endif()
+
+# Create CMake script for PlugData installation
+if(CTGUI_ENABLE)
+    # When ctgui is enabled, copy both conTorchionist and ctgui distributions
+    set(CTGUI_DIST_DIR "${PROJECT_DIST_DIR}/ctgui")
+    
+    file(WRITE "${CMAKE_BINARY_DIR}/install_contorchionist_plugdata.cmake"
+"message(STATUS \"Running combined install script for PlugData...\")\n"
+"# Install conTorchionist\n"
+"if(EXISTS \"${PLUGDATA_USER_DIR}\")\n"
+"  message(STATUS \"Installing conTorchionist to ${PLUGDATA_USER_DIR}...\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/contorchionist\" DESTINATION \"${PLUGDATA_USER_DIR}\")\n"
+"  message(STATUS \"Copied conTorchionist to ${PLUGDATA_USER_DIR}\")\n"
+"  \n"
+"  # Install ctgui if its distribution exists\n"
+"  if(EXISTS \"${CTGUI_DIST_DIR}\")\n"
+"    message(STATUS \"Installing ctgui to ${PLUGDATA_USER_DIR}...\")\n"
+"    file(COPY \"${CTGUI_DIST_DIR}\" DESTINATION \"${PLUGDATA_USER_DIR}\")\n"
+"    message(STATUS \"Copied ctgui to ${PLUGDATA_USER_DIR}\")\n"
+"  else()\n"
+"    message(WARNING \"ctgui distribution not found at ${CTGUI_DIST_DIR}\")\n"
+"  endif()\n"
+"else()\n"
+"  message(WARNING \"PlugData externals dir ${PLUGDATA_USER_DIR} not found; skipping installation\")\n"
+"endif()\n")
+    
+    add_custom_target(install-all-plugdata
+        COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/install_contorchionist_plugdata.cmake
+        COMMENT "Install conTorchionist and ctgui to PlugData user directory"
+        VERBATIM
+    )
+    
+    message(STATUS "When CTGUI_ENABLE is ON, use 'install-all-plugdata' target for combined installation")
+    
+else()
+    # conTorchionist-only install script
+    file(WRITE "${CMAKE_BINARY_DIR}/install_plugdata.cmake"
+"message(STATUS \"Running install-plugdata script...\")\n"
 "if(EXISTS \"${PLUGDATA_USER_DIR}\")\n"
 "  message(STATUS \"Found target PlugData externals dir: ${PLUGDATA_USER_DIR} - copying distribution...\")\n"
-"  file(COPY \"${PD_OUTPUT_DIR}/contorchionistSN\" DESTINATION \"${PLUGDATA_USER_DIR}\")\n"
-"  file(COPY \"${PD_OUTPUT_DIR}/ctgui\" DESTINATION \"${PLUGDATA_USER_DIR}\")\n"
+"  file(COPY \"${PD_OUTPUT_DIR}/contorchionist\" DESTINATION \"${PLUGDATA_USER_DIR}\")\n"
 "  message(STATUS \"Copied distribution to ${PLUGDATA_USER_DIR}\")\n"
 "else()\n"
 "  message(STATUS \"PlugData externals dir ${PLUGDATA_USER_DIR} not found; skipping copy\")\n"
 "endif()\n")
-
-add_custom_target(install-puredata
-    COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/install_puredata.cmake
-    COMMENT "Install Pure Data externals to user directories (if present)"
-    VERBATIM
-)
+    
+    add_custom_target(install-plugdata
+        COMMAND ${CMAKE_COMMAND} -P ${CMAKE_BINARY_DIR}/install_plugdata.cmake
+        COMMENT "Install Pure Data externals to PlugData user directory"
+        VERBATIM
+    )
+endif()
 
 # --- Instalação via cmake --install ---
 
 # Instala em Pure Data se o diretório existir
 if(EXISTS ${PD_USER_PDDIR})
     message(STATUS "Instalação habilitada para: ${PD_USER_PDDIR}")
-    install(DIRECTORY ${PD_OUTPUT_DIR}/contorchionistSN
+    install(DIRECTORY ${PD_OUTPUT_DIR}/contorchionist
             DESTINATION ${PD_USER_PDDIR}
-            USE_SOURCE_PERMISSIONS
-            COMPONENT pd_externals)
-    install(DIRECTORY ${PD_OUTPUT_DIR}/ctgui
-            DESTINATION ${PD_USER_PDDIR}
-            USE_SOURCE_PERMISSIONS
-            COMPONENT pd_externals)
-    # Também adiciona ao componente 'all'
-    install(DIRECTORY ${PD_OUTPUT_DIR}/contorchionistSN
-            DESTINATION ${PD_USER_PDDIR}
-            USE_SOURCE_PERMISSIONS
-            COMPONENT all)
-    install(DIRECTORY ${PD_OUTPUT_DIR}/ctgui
-            DESTINATION ${PD_USER_PDDIR}
-            USE_SOURCE_PERMISSIONS
-            COMPONENT all)
+            USE_SOURCE_PERMISSIONS)
 else()
     message(STATUS "Diretório não encontrado, instalação desabilitada: ${PD_USER_PDDIR}")
 endif()
@@ -507,23 +605,9 @@ endif()
 # Instala em PlugData se o diretório existir
 if(EXISTS ${PLUGDATA_USER_DIR})
     message(STATUS "Instalação habilitada para: ${PLUGDATA_USER_DIR}")
-    install(DIRECTORY ${PD_OUTPUT_DIR}/contorchionistSN
+    install(DIRECTORY ${PD_OUTPUT_DIR}/contorchionist
             DESTINATION ${PLUGDATA_USER_DIR}
-            USE_SOURCE_PERMISSIONS
-            COMPONENT plugdata_externals)
-    install(DIRECTORY ${PD_OUTPUT_DIR}/ctgui
-            DESTINATION ${PLUGDATA_USER_DIR}
-            USE_SOURCE_PERMISSIONS
-            COMPONENT plugdata_externals)
-    # Também adiciona ao componente 'all'
-    install(DIRECTORY ${PD_OUTPUT_DIR}/contorchionistSN
-            DESTINATION ${PLUGDATA_USER_DIR}
-            USE_SOURCE_PERMISSIONS
-            COMPONENT all)
-    install(DIRECTORY ${PD_OUTPUT_DIR}/ctgui
-            DESTINATION ${PLUGDATA_USER_DIR}
-            USE_SOURCE_PERMISSIONS
-            COMPONENT all)
+            USE_SOURCE_PERMISSIONS)
 else()
     message(STATUS "Diretório não encontrado, instalação desabilitada: ${PLUGDATA_USER_DIR}")
 endif()

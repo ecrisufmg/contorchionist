@@ -26,10 +26,11 @@ if(NOT DEFINED PD_SOURCES_PATH)
             message(STATUS "Found local Pure Data source: ${PD_SOURCES_PATH}")
         else()
             message(STATUS "Pure Data source not found locally. Fetching from remote...")
+            message(STATUS "Using Pure Data version: ${PDVERSION}")
             FetchContent_Declare(
                 pd_source
                 GIT_REPOSITORY https://github.com/pure-data/pure-data.git
-                GIT_TAG 0.55-2
+                GIT_TAG ${PDVERSION}
             )
             FetchContent_MakeAvailable(pd_source)
             set(PD_SOURCES_PATH "${pd_source_SOURCE_DIR}/src" CACHE PATH "Path to fetched Pure Data source" FORCE)
@@ -49,7 +50,7 @@ message(STATUS "  PD_EXTERNAL_SUFFIX: ${PD_EXTERNAL_SUFFIX}")
 # --- Common Setup & Utility Definitions ---
 
 # Define a single output directory for all externals
-set(PD_EXTERNAL_OUTPUT_DIR "${PROJECT_DIST_DIR}/puredata/contorchionistSN")
+set(PD_EXTERNAL_OUTPUT_DIR "${PROJECT_DIST_DIR}/puredata/contorchionist")
 file(MAKE_DIRECTORY ${PD_EXTERNAL_OUTPUT_DIR})
 
 # Define RPATH logic once
@@ -379,30 +380,6 @@ if(IS_DIRECTORY "${ABS_SOURCE_DIR}" AND NOT TARGET pd_copy_all_abs_files)
 else()
     if(NOT IS_DIRECTORY "${ABS_SOURCE_DIR}")
         message(WARNING "Abs directory not found: ${ABS_SOURCE_DIR}")
-    endif()
-endif()
-
-# --- Copy ctgui_pdlua to dist/ctgui ---
-set(CTGUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ctgui_pdlua")
-set(CTGUI_DIST_DIR "${PROJECT_DIST_DIR}/puredata/ctgui")
-
-if(IS_DIRECTORY "${CTGUI_SOURCE_DIR}" AND NOT TARGET pd_copy_ctgui)
-    add_custom_target(pd_copy_ctgui ALL
-        COMMENT "Preparing to copy ctgui_pdlua directory to ${CTGUI_DIST_DIR}"
-    )
-
-    add_custom_command(
-        TARGET pd_copy_ctgui POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CTGUI_DIST_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CTGUI_SOURCE_DIR}" "${CTGUI_DIST_DIR}"
-        COMMENT "Copying ctgui_pdlua directory from ${CTGUI_SOURCE_DIR} to ${CTGUI_DIST_DIR}"
-        VERBATIM
-    )
-
-    message(STATUS "Configured copy of ctgui_pdlua directory to ${CTGUI_DIST_DIR}")
-else()
-    if(NOT IS_DIRECTORY "${CTGUI_SOURCE_DIR}")
-        message(WARNING "ctgui_pdlua directory not found: ${CTGUI_SOURCE_DIR}")
     endif()
 endif()
 

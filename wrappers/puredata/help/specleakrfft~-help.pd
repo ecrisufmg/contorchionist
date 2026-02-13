@@ -1,5 +1,5 @@
 #N canvas 0 38 1512 916 12;
-#X declare -path conTorchionistSN;
+#X declare -path contorchionist;
 #X obj 155 278 spectraces~;
 #X obj 148 66 osc~ 440;
 #X obj 509 120 else/trig2bang~;
@@ -24,7 +24,7 @@
 #X obj -3 73 /;
 #X msg -3 47 48000 2048;
 #X obj 449 80 else/envgen~ 20 1 800 0;
-#X obj 172 -44 declare -path conTorchionistSN;
+#X obj 172 -44 declare -path contorchionist;
 #X connect 0 0 15 1;
 #X connect 0 0 15 0;
 #X connect 1 0 14 0;

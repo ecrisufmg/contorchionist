@@ -1,8 +1,8 @@
 #N canvas 577 112 800 600 12;
 #X declare -path shoat;
-#X declare -path conTorchionistSN;
+#X declare -path contorchionist;
 #X declare -path else;
-#X declare -path conTorchionistSN;
+#X declare -path contorchionist;
 #X text 1922 848 torch.spectrails~ - Spectral Trails Effect;
 #X text 1922 878 Creates spectral memory/trails with threshold-based reinforcement;
 #X text 1922 898 Use inside [pfft~] between [torch.rfft~] and [torch.irfft~];
@@ -370,7 +370,7 @@
 #X text 1173 748 out1: power (linear) / out2: phase;
 #X text 1173 772 out1: power (dB) / out2: phase;
 #X msg 959 751 norm powpeak;
-#X obj 3 113 declare -path conTorchionistSN;
+#X obj 3 113 declare -path contorchionist;
 #X obj 49 687 outlet~;
 #X obj 117 687 outlet~;
 #X obj 185 687 outlet~;
@@ -537,7 +537,7 @@
 #X connect 23 0 3 0;
 #X coords 0 -1 1 1 280 90 2 2 210;
 #X restore 1077 510 pd bin stats;
-#X obj 7 7 declare -path conTorchionistSN, f 27;
+#X obj 7 7 declare -path contorchionist, f 27;
 #X msg 1335 5 threshdb \$1;
 #X obj 1073 -36 hsl 153 30 0 40 0 0 empty empty empty -2 -8 0 10 #e4e4e4 #4d4d4d #373737 0 1;
 #X floatatom 1236 -36 6 0 0 0 - - - 24;

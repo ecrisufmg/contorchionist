@@ -1,6 +1,6 @@
 #N canvas 500 200 800 600 12;
-#X declare -path conTorchionistSN;
-#X declare -path conTorchionistSN;
+#X declare -path contorchionist;
+#X declare -path contorchionist;
 #X obj 428 535 vu 19 120 empty empty -1 -10 0 12 #404040 #000000 1 0;
 #N canvas 733 172 450 300 dB 0;
 #X obj 593 500 env~;
@@ -132,7 +132,7 @@
 #X connect 23 0 3 0;
 #X coords 0 -1 1 1 280 90 2 2 210;
 #X restore 516 401 pd bin stats;
-#X obj 37 29 declare -path conTorchionistSN;
+#X obj 37 29 declare -path contorchionist;
 #X obj 139 123 torch.rfft~ -unit magphase -w hann -norm mag;
 #X obj 312 79 lop~ 9000;
 #X floatatom 368 34 5 0 0 0 - - - 12;
@@ -172,7 +172,7 @@
 #X text 436 368 0;
 #X floatatom 96 121 6 0 0 0 - - - 16;
 #X msg 532 7 curve;
-#X obj 25 23 declare -path conTorchionistSN;
+#X obj 25 23 declare -path contorchionist;
 #X obj 111 61 loadbang;
 #X msg 111 87 -10;
 #N canvas 733 172 450 300 (subpatch) 0;
