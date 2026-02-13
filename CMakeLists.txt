@@ -332,13 +332,24 @@ include_directories(include) # headers for the project
 # or through find_package), you might not need to do much more here.
 # Otherwise, you might need to use add_subdirectory pointing to their source and build them directly.
 
-# --- Libsndfile ---
-option(BUILD_SHARED_LIBS "Build shared libraries" OFF) # We want static for the external
+# --- Libsndfile (via FetchContent) ---
+# Substitui o submodule manual pelo download automático via CMake
+include(FetchContent)
+
+FetchContent_Declare(
+  libsndfile
+  GIT_REPOSITORY https://github.com/libsndfile/libsndfile.git
+  GIT_TAG        master  # Você pode fixar uma tag específica (ex: 1.2.2) para produção
+)
+
+# Opções de configuração para libsndfile (para garantir build estático e leve)
+option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 set(BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(ENABLE_INSTALL_COMPONENTS OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/libsndfile)
+
+FetchContent_MakeAvailable(libsndfile)
 
 # Example for pd.cmake (if it's a CMake utility module, not a library to build)
 # list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/third_party/pd.cmake)
