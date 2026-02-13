@@ -1,11 +1,11 @@
 #N canvas 827 239 734 565 12;
 #X declare -path shoat;
 #X declare -path ctgui;
-#X declare -path contorchionistSN;
-#X declare -path conTorchionistSN;
+#X declare -path contorchionist;
+#X declare -path contorchionist;
 #X obj 722 21 declare -path shoat;
 #X obj 704 70 declare -path ctgui;
-#X obj 700 117 declare -path contorchionistSN;
+#X obj 700 117 declare -path contorchionist;
 #X obj -284 446 ctgui.vu @dark @ch 4 @led 14 @scale @w 120 @h 48;
 #X obj -370 377 rms~ 16384;
 #X obj -241 377 rms~ 16384;
@@ -25,7 +25,7 @@
 #X obj 822 -106 inlet~;
 #X obj 1207 -106 inlet~;
 #X obj 85 -116 block~ 8192 4;
-#X obj 16 -146 declare -path conTorchionistSN;
+#X obj 16 -146 declare -path contorchionist;
 #X obj -110 7 inlet;
 #X obj 1658 -58 r to_torchrfft;
 #X obj 408 141 outlet;

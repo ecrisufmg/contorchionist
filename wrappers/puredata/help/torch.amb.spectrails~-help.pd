@@ -1,7 +1,7 @@
 #N canvas 500 200 800 600 12;
-#X declare -path conTorchionistSN;
+#X declare -path contorchionist;
 #X declare -path shoat;
-#X declare -path conTorchionistSN;
+#X declare -path contorchionist;
 #X text 1922 848 torch.spectrails~ - Spectral Trails Effect;
 #X text 1922 878 Creates spectral memory/trails with threshold-based reinforcement;
 #X text 1922 898 Use inside [pfft~] between [torch.rfft~] and [torch.irfft~];
@@ -32,7 +32,7 @@
 #X text 1942 1353 - limiter: Prevents output from exceeding maxvalue;
 #X text 1922 1378 NOTE: DC and Nyquist bins are always zeroed for phase;
 #X text 1738 1009 <- see inside;
-#X obj 7 7 declare -path conTorchionistSN, f 27;
+#X obj 7 7 declare -path contorchionist, f 27;
 #X text 1587 364 stop playback;
 #X obj 422 73 tgl 25 0 empty empty empty 17 7 0 10 #e4e4e4 #4d4d4d #373737 0 1;
 #X obj 260 162 vsl 18 100 -1 1 0 0 ewtwet wefwert empty 0 -9 0 10 #dcdcdc #000000 #000000 0 1;
@@ -373,7 +373,7 @@
 #X connect 23 0 3 0;
 #X coords 0 -1 1 1 280 90 2 2 210;
 #X restore 542 736 pd bin stats;
-#X obj 3 -21 declare -path conTorchionistSN;
+#X obj 3 -21 declare -path contorchionist;
 #X text 1174 1190 @fftsize <N> - FFT size (default: 1024);
 #X text 1174 1205 @threshold <f> - Magnitude threshold (default: 0.01);
 #X text 1174 1220 @attack <f> - Attack coefficient 0-1 (default: 0.8);
