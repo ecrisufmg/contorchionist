@@ -98,7 +98,7 @@ static void torch_ts_model(t_torch_ts *x,t_symbol *filename, t_symbol *format) {
         }
 
         //set the default method to be used on the loaded model as "forward"
-        x->selected_method = "forward";
+        x->selected_method = "forward"; 
 
         std::string error_message;
         std::vector<std::string> log_messages;
@@ -109,6 +109,7 @@ static void torch_ts_model(t_torch_ts *x,t_symbol *filename, t_symbol *format) {
                 &x->input_shape_model,
                 &x->output_shape_model,
                 &x->tensors_struct->input_tensor_model,
+                x->device,
                 &error_message,
                 &log_messages
             );
@@ -159,6 +160,7 @@ static void torch_ts_select_method(t_torch_ts *x, t_symbol *s, int argc, t_atom 
             &x->input_shape_model,
             &x->output_shape_model,
             &x->tensors_struct->input_tensor_model,
+            x->device,
             &error_message,
             &log_messages
         );

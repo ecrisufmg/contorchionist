@@ -4,7 +4,7 @@
 #include <sstream>
 #include "core_nn_ts_manager.h"
 
- 
+  
 namespace contorchionist {
     namespace core {
         namespace nn_ts_manager {
@@ -109,57 +109,71 @@ bool extract_channels_method(
     try {
         // search for method name + "_in_ch" attribute (ex: "forward_in_ch" for "forward" method)
         std::string in_ch_attr = method_name + "_in_ch";
-        if (model->hasattr(in_ch_attr)) {
+        if (model->hasattr(in_ch_attr) && model->attr(in_ch_attr).toInt() > 0) {
             in_ch = model->attr(in_ch_attr.c_str()).toInt();
             if (log_messages) {
                 log_messages->push_back(in_ch_attr + ": input channels = " + std::to_string(in_ch));
             }
         } else {
             if (error_message) {
-                *error_message = "Model has no '" + in_ch_attr + "' attribute.";
+                *error_message = "Model has no valid '" + in_ch_attr + "' attribute.";
             }
-            in_ch = -1;
+            in_ch = 1;
+            return false;
         }
         
         // search for method name + "_out_ch" attribute (ex: "forward_out_ch" for "forward" method)
         std::string out_ch_attr = method_name + "_out_ch";
-        if (model->hasattr(out_ch_attr)) {
+        if (model->hasattr(out_ch_attr) && model->attr(out_ch_attr).toInt() > 0) {
             out_ch = model->attr(out_ch_attr.c_str()).toInt();
             if (log_messages) {
                 log_messages->push_back(out_ch_attr + ": output channels = " + std::to_string(out_ch));
             }
         } else {
             if (error_message) {
-                *error_message = "Model has no '" + out_ch_attr + "' attribute.";
+                *error_message = "Model has no valid '" + out_ch_attr + "' attribute.";
             }
-            out_ch = -1;
+            out_ch = 1;
+            return false;
         }
         
         // search for model internal buffer attribute
         std::string m_buffer_size_attr = "m_buffer_size";
-        if (model->hasattr(m_buffer_size_attr)) {
+        if (model->hasattr(m_buffer_size_attr) && model->attr(m_buffer_size_attr).toInt() > 0) {
             model_buffer_size = model->attr(m_buffer_size_attr.c_str()).toInt();
             if (log_messages) {
                 log_messages->push_back(m_buffer_size_attr + ": Model buffer size = " + std::to_string(model_buffer_size));
             }
         } else {
             if (error_message) {
-                *error_message = "Model has no '" + m_buffer_size_attr + "' attribute.";
+                *error_message = "Model has no valid '" + m_buffer_size_attr + "' attribute.";
             }
-            model_buffer_size = -1;
+            model_buffer_size = 0;
+            return false;
         }
 
         // search for model max buffer attribute
         std::string max_buffer_size_attr = "max_buffer_size";
-        if (model->hasattr(max_buffer_size_attr)) {
-            int max_buffer_size = model->attr(max_buffer_size_attr.c_str()).toInt();
-            if (log_messages) {
-                log_messages->push_back(max_buffer_size_attr + ": Model max buffer size = " + std::to_string(max_buffer_size));
-            }
-        } else {
+        //check if has buffer size attr 
+        if(!model->hasattr(max_buffer_size_attr)){
             if (error_message) {
                 *error_message = "Model has no '" + max_buffer_size_attr + "' attribute.";
             }
+            max_buffer_size = 0;
+            return false;
+        }
+        int max_buffer_size_value = model->attr(max_buffer_size_attr.c_str()).toInt();
+        // check if max buffer size is >= model buffer size
+        if (max_buffer_size_value < model_buffer_size){
+            if (error_message) {
+                *error_message = "Invalid '" + max_buffer_size_attr + "' (" + std::to_string(max_buffer_size_value) + "): must be >= " + m_buffer_size_attr + "(" + std::to_string(model_buffer_size) + ").";
+            }
+            max_buffer_size = 0;
+            return false;
+        }
+        max_buffer_size = max_buffer_size_value;
+        if (log_messages) {
+            log_messages->push_back(max_buffer_size_attr + ": Model max buffer size = " + std::to_string(max_buffer_size));
         }
         return true;
     } catch (const std::exception& e) {
@@ -177,6 +191,7 @@ bool extract_shape_method(
     std::vector<int64_t>* input_shape, // input shape vector
     std::vector<int64_t>* output_shape, // output shape vector
     at::Tensor* input_tensor, // input tensor pointer (declared at tensors struct)
+    const torch::Device& device, // device to create the input tensor
     std::string* error_message,
     std::vector<std::string>* log_messages) {
 
@@ -237,9 +252,9 @@ bool extract_shape_method(
             }
         }
 
-        // create the input tensor based on the selected method input shape 
+        // create the input tensor on the specified device and based on the selected method input shape 
         if (input_tensor && input_shape && !input_shape->empty()) {
-            *input_tensor = torch::randn(*input_shape, torch::TensorOptions().dtype(torch::kFloat));
+            *input_tensor = torch::randn(*input_shape, torch::TensorOptions().dtype(torch::kFloat).device(device));
             
             // Log tensor creation
             if (log_messages) {

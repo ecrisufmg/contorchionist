@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
 
+# macOS deployment target MUST be set before project() so CMake initializes compiler flags with it
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum OS X deployment version" FORCE)
+endif()
+
 project(contorchionist LANGUAGES CXX C)
 
 # Generate compile_commands.json for IDEs like VSCode
@@ -25,8 +30,6 @@ set(CMAKE_MACOSX_RPATH ON)
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 
 # macOS specific settings
-# Minimum OS X deployment version changed from 10.9 to 10.13 (std::optional::value() is just available for 10.13 and later).
-set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum OS X deployment version")
 # Build Universal Binary for Max compatibility (Max externals typically need this)
 if(APPLE)
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")

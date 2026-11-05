@@ -22,7 +22,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_LIB_DIR}")
 
 # --- macOS Specific Settings ---
 if(APPLE)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum OS X deployment version")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum OS X deployment version")
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS Architectures (e.g., arm64;x86_64 or x86_64)")
     message(STATUS "Configuring for macOS. Deployment Target: ${CMAKE_OSX_DEPLOYMENT_TARGET}, Architectures: ${CMAKE_OSX_ARCHITECTURES}")
 endif()

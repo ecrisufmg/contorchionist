@@ -281,7 +281,7 @@ typedef struct _torch_ts_tilde{
 }t_torch_ts_tilde;
 
 
-// ------------------- Struct torch.tensor ------------------- //
+// ------------------- Struct torch.ls2tensor ------------------- //
 typedef struct _torch_ls2tensor {
     t_object x_obj;
     t_symbol *name; // unique name for this tensor instance

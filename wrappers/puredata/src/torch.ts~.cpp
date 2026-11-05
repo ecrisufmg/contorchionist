@@ -12,7 +12,7 @@
 #define PD_HAVE_MULTICHANNEL CLASS_MULTICHANNEL
 #endif
 
-
+ 
 #include <cstring>       // For std::memcpy and std::memset
 #include <string>        // For std::string
 #include <vector>        // For intermediate storage if needed
@@ -345,6 +345,11 @@ static void torch_ts_tilde_AddDsp(t_torch_ts_tilde *x, t_signal **sp) {
         contorchionist::core::ap_torchts::create_circular_buffer(x->in_buffers, x->out_buffers, x->in_ch, x->out_ch, x->buffer_size);
         // resize the in_blocks and in_ptrs vectors to hold the input circular buffers
         x->in_blocks.resize(x->in_ch);
+        // loop through the input blocks and resize them to the new buffer size
+        for (auto& block : x->in_blocks) {
+            block.resize(x->buffer_size);
+        }
+        // resize the in_ptrs vector to hold the input circular buffers
         x->in_ptrs.resize(x->in_ch);
         // print message
         if (x->verbose) {
@@ -392,7 +397,6 @@ static void torch_ts_tilde_AddDsp(t_torch_ts_tilde *x, t_signal **sp) {
         post("torch.ts~: Latency = %d samples (%.2f ms)", x->buffer_size, latency_ms);
     }
 }
-
 
 
 //* -------------------------- constructor -------------------------- //
@@ -553,6 +557,8 @@ void *torch_ts_tilde_New(t_symbol *s, int argc, t_atom *argv) {
     // error handling for channel extraction
     if (!channels_extracted) {
         pd_error(x, "torch.ts~: %s", error_message.c_str());
+        pd_error(x, "torch.ts~: Model disabled due to missing or invalid attributes.");
+        x->loaded_model = false;
     }
 
     // log messages from the channel extraction

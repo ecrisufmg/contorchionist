@@ -32,7 +32,7 @@ if(APPLE)
         message(STATUS "Set CMake architecture for Intel: ${CMAKE_OSX_ARCHITECTURES}")
     endif()
     
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.11" CACHE STRING "Minimum OS X deployment version" FORCE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum OS X deployment version" FORCE)
     
     # Note: Skipping Max linker flags as they're causing issues with our build
     # The Max frameworks should provide the necessary symbol resolution
@@ -41,6 +41,11 @@ endif()
 
 # Include the Max SDK pre-target script
 include(${MAX_SDK_BASE_SCRIPT_PATH}/max-pretarget.cmake)
+
+# Re-establish 11.0 because max-pretarget.cmake forces 10.11
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum OS X deployment version" FORCE)
+endif()
 
 # --- Common Setup ---
 set(MAX_EXTERNAL_OUTPUT_DIR "${PROJECT_DIST_DIR}/max")

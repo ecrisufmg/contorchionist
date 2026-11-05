@@ -1,6 +1,6 @@
 #ifndef CORE_NN_TS_MANAGER_H
 #define CORE_NN_TS_MANAGER_H
-
+ 
 #include <torch/torch.h>
 #include <torch/script.h>
 #include <vector>
@@ -81,6 +81,7 @@ bool extract_shape_method(
     std::vector<int64_t>* input_shape,      // input shape vector
     std::vector<int64_t>* output_shape,     // output shape vector
     at::Tensor* input_tensor,               // input tensor pointer (opcional)
+    const torch::Device& device,            // target device
     std::string* error_message = nullptr,   // optional error message
     std::vector<std::string>* log_messages = nullptr);  // optional log messages
 
